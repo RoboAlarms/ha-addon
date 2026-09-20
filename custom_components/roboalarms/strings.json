@@ -17,6 +17,10 @@
       "pair": {
         "title": "Pair with the panel",
         "description": "On the panel, open Settings > Integrations > Home Assistant and tap **Pair with Home Assistant** (it asks for the master or installer code). Pairing stays open for two minutes.\n\nThen continue here."
+      },
+      "reauth_confirm": {
+        "title": "Pair with the panel again",
+        "description": "{name} no longer answers with the certificate it was paired with - usually after a factory reset. Open pairing on the panel (Settings > Integrations > Home Assistant > Pair), then continue here."
       }
     },
     "progress": {
@@ -32,7 +36,9 @@
       "unknown": "The discovered device did not identify itself as a RoboAlarms Panel.",
       "pair_rejected": "The panel rejected the pairing.",
       "pair_timeout": "Pairing timed out on the panel. Open it again and retry.",
-      "pair_mismatch": "The pairing could not be trusted and was stopped. Try again on a network you trust."
+      "pair_mismatch": "The pairing could not be trusted and was stopped. Try again on a network you trust.",
+      "reauth_successful": "The panel is paired again.",
+      "wrong_device": "That address now belongs to a different panel."
     }
   }
 }

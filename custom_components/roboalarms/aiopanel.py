@@ -68,6 +68,108 @@ class PanelInfo:
     paired: bool
 
 
+@dataclass
+class PartitionState:
+    """One partition, as the panel's partition-status object reports it."""
+
+    partition: int
+    name: str
+    state: str
+    ha_state: str  # disarmed/arming/armed_home/armed_away/armed_night/pending/triggered
+    ready: bool
+    chime: bool
+    triggered: bool
+    raw: dict[str, Any]
+
+    @classmethod
+    def from_json(cls, d: dict[str, Any]) -> PartitionState:
+        return cls(
+            partition=int(d["partition"]),
+            name=str(d.get("name") or ""),
+            state=str(d.get("state") or ""),
+            ha_state=str(d.get("ha_state") or "disarmed"),
+            ready=bool(d.get("ready", False)),
+            chime=bool(d.get("chime", False)),
+            triggered=bool(d.get("triggered", False)),
+            raw=d,
+        )
+
+
+@dataclass
+class ZoneState:
+    """One zone, as the panel's zone-state object reports it."""
+
+    zone: int
+    name: str
+    type: str
+    device_class: str
+    partition: int
+    open: bool
+    bypassed: bool
+    alarm: bool
+    trouble: bool
+    tamper: bool
+    low_battery: bool
+    supervision: bool
+    raw: dict[str, Any]
+
+    @classmethod
+    def from_json(cls, d: dict[str, Any]) -> ZoneState:
+        return cls(
+            zone=int(d["zone"]),
+            name=str(d.get("name") or ""),
+            type=str(d.get("type") or ""),
+            device_class=str(d.get("device_class") or ""),
+            partition=int(d.get("partition") or 1),
+            open=bool(d.get("open", False)),
+            bypassed=bool(d.get("bypassed", False)),
+            alarm=bool(d.get("alarm", False)),
+            trouble=bool(d.get("trouble", False)),
+            tamper=bool(d.get("tamper", False)),
+            low_battery=bool(d.get("low_battery", False)),
+            supervision=bool(d.get("supervision", False)),
+            raw=d,
+        )
+
+
+@dataclass
+class PanelState:
+    """Everything the panel has pushed so far (snapshot, then deltas)."""
+
+    seq: int = 0
+    partitions: dict[int, PartitionState] | None = None
+    zones: dict[int, ZoneState] | None = None
+    troubles: dict[str, Any] | None = None
+
+    def apply(self, msg: dict[str, Any]) -> None:
+        """Fold a snapshot or delta into this state.
+
+        A snapshot replaces everything (zones removed on the panel disappear);
+        a delta only touches what it carries.
+        """
+        kind = msg.get("t")
+        if kind == "snapshot":
+            self.partitions = {}
+            self.zones = {}
+            self.troubles = None
+        elif self.partitions is None or self.zones is None:
+            raise InvalidMessage("a delta arrived before any snapshot")
+        for d in msg.get("partitions") or []:
+            p = PartitionState.from_json(d)
+            self.partitions[p.partition] = p
+        for d in msg.get("zones") or []:
+            z = ZoneState.from_json(d)
+            self.zones[z.zone] = z
+        if "troubles" in msg:
+            self.troubles = msg["troubles"]
+        self.seq = int(msg.get("seq") or self.seq)
+
+    @property
+    def ready(self) -> bool:
+        """A snapshot has arrived: the state means something."""
+        return self.partitions is not None
+
+
 def pair_commit(nonce: bytes) -> str:
     """The commitment sent in pair_start: hex SHA-256 of the client's nonce."""
     return hashlib.sha256(nonce).hexdigest()
@@ -219,14 +321,12 @@ class PanelClient:
             raise CannotConnect("connection lost") from err
 
     async def recv(self, timeout: float = _CONNECT_TIMEOUT) -> dict[str, Any]:
-        """Receive one message."""
+        """Receive one message. TimeoutError means only that nothing arrived:
+        a quiet link is for the caller to judge (keepalives, protocol.md)."""
         if self._reader is None:
             raise CannotConnect("not connected")
-        try:
-            async with asyncio.timeout(timeout):
-                return await read_frame(self._reader)
-        except TimeoutError as err:
-            raise CannotConnect("the panel stopped answering") from err
+        async with asyncio.timeout(timeout):
+            return await read_frame(self._reader)
 
     @property
     def panel_cert_der(self) -> bytes | None:
@@ -272,7 +372,10 @@ class PanelClient:
 
     async def pair_wait(self, timeout: float = 130.0) -> bytes:
         """Wait for the person at the panel; returns the panel fingerprint to pin."""
-        msg = await self.recv(timeout=timeout)
+        try:
+            msg = await self.recv(timeout=timeout)
+        except TimeoutError as err:
+            raise PairingFailed("timeout") from err
         if msg.get("t") != "pair_result":
             raise InvalidMessage(f"expected pair_result, got {msg.get('t')!r}")
         result = str(msg.get("result") or "unknown")

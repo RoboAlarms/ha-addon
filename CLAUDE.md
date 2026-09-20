@@ -47,21 +47,25 @@ Nothing released yet:
   panel, and the entry stores the client identity (generated per flow with `cryptography`)
   plus the panel's pinned certificate fingerprint (`const.py` CONF_* keys). The panel side
   (`ha_link` in the firmware repo) is built and compiles, not yet run on hardware.
-- `__init__.py` forwards to an empty platform list; `strings.json` = `translations/en.json`.
+- **entities work against a fake panel**: `coordinator.py` (one connection, the snapshot at
+  connect, deltas folded in, events onto the bus as `roboalarms_event`, commands matched to
+  results by id, pings after 30 quiet seconds, reconnect with backoff, the pinned fingerprint
+  checked on every connect — a mismatch starts reauth), `alarm_control_panel.py` (one per
+  partition, `ha_state` straight from the panel), `binary_sensor.py` (every zone its own
+  device under the panel, new zones appear without a restart), `diagnostics.py` (keys
+  redacted), and the reauth flow (pair again after a factory reset). `tests/test_init.py`
+  drives all of it over a real socket. `strings.json` = `translations/en.json`.
 - brand icon is a generated placeholder (shield + check); `docs/panel-home.png` is the real
   panel's Home screen from the firmware repo's UI preview (regenerate there, shot 01).
 - CI: hassfest + HACS validation, pytest, ruff.
 
 **Next steps (M12 order, from Features/23 tasks):**
-1. Protocol: snapshot/delta/event/command/result messages (spec first, in the panel repo's
-   protocol.md, then both implementations with shared goldens).
-2. Push coordinator + platforms: `alarm_control_panel` first, then binary_sensor, sensor,
-   switch, button, event, update (HAI-005..008); entities unavailable on link loss.
-3. Pinned-fingerprint verification on the paired connection in `__init__.py`'s setup
-   (compare `PanelClient.panel_cert_der` to CONF_PANEL_FP, else reauth), reauth and
-   reconfigure flows, diagnostics and repairs (HAI-011, HAI-013).
-4. Split `aiopanel.py` out as `aioroboalarms` on PyPI when it stabilizes.
-5. First GitHub release when a real panel pairs end to end (needs the owner's panel);
+1. Remaining platforms: switch (chime — the panel's command is a toggle), button (exit
+   restart), sensor and the event entity, update (via the panel's OTA state) (HAI-005).
+2. Reconfigure flow (host/port without re-pairing), repair issues (HAI-011, HAI-013),
+   entity translations and icons; HAI-010 on the panel (MQTT discovery off while paired).
+3. Split `aiopanel.py` out as `aioroboalarms` on PyPI when it stabilizes.
+4. First GitHub release when a real panel pairs end to end (needs the owner's panel);
    HACS default-store inclusion later.
 
 **Open items:**

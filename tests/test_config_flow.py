@@ -172,6 +172,45 @@ async def test_pair_rejected_aborts(hass: HomeAssistant) -> None:
     assert result["reason"] == "pair_rejected"
 
 
+async def test_reauth_pairs_again(hass: HomeAssistant) -> None:
+    """After a factory reset: reauth walks the pairing steps and repairs the entry."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="0a1b2c",
+        title="Home",
+        data={
+            CONF_HOST: "192.168.1.50",
+            CONF_PORT: 6054,
+            CONF_PANEL_FP: "aa" * 32,
+            CONF_CLIENT_KEY: "OLD-KEY",
+            CONF_CLIENT_CERT: "OLD-CERT",
+        },
+    )
+    entry.add_to_hass(hass)
+    client, allow = _mock_client()
+    with (
+        _patched(client),
+        patch(
+            "custom_components.roboalarms.coordinator.RoboAlarmsCoordinator.async_start",
+            AsyncMock(),
+        ),
+    ):
+        result = await entry.start_reauth_flow(hass)
+        assert result["step_id"] == "reauth_confirm"
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+        assert result["step_id"] == "pair"
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+        assert result["type"] is FlowResultType.SHOW_PROGRESS
+        allow.set()
+        await hass.async_block_till_done()
+        result = await hass.config_entries.flow.async_configure(result["flow_id"])
+        assert result["type"] is FlowResultType.ABORT
+        assert result["reason"] == "reauth_successful"
+        await hass.async_block_till_done()
+    assert entry.data[CONF_PANEL_FP] == PANEL_FP.hex()
+    assert entry.data[CONF_CLIENT_KEY] == "KEY-PEM"
+
+
 async def test_user_flow_recovers_from_cannot_connect(hass: HomeAssistant) -> None:
     """A failed connection test shows the form again; the flow then recovers."""
     client, _allow = _mock_client()

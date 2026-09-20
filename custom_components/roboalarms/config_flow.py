@@ -16,6 +16,7 @@ import asyncio
 from typing import Any
 
 import voluptuous as vol
+from homeassistant import config_entries
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
@@ -164,6 +165,41 @@ class RoboAlarmsConfigFlow(ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
+    # ---- reauth: the panel was factory-reset or replaced (HAI-004) ----------------
+
+    async def async_step_reauth(self, entry_data: dict[str, Any]) -> ConfigFlowResult:
+        """The pinned certificate no longer matches: pair again."""
+        entry = self._get_reauth_entry()
+        self._host = entry.data[CONF_HOST]
+        self._port = entry.data[CONF_PORT]
+        self._name = entry.title
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Check it is the same panel, then walk the normal pairing steps."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            try:
+                client = await self._async_connect()
+            except (CannotConnect, InvalidMessage, TimeoutError):
+                errors["base"] = "cannot_connect"
+            except UnsupportedVersion:
+                errors["base"] = "unsupported"
+            else:
+                info = client.info
+                await client.close()
+                assert info is not None
+                if info.panel_id != self._get_reauth_entry().unique_id:
+                    return self.async_abort(reason="wrong_device")
+                return await self.async_step_pair()
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            description_placeholders={"name": self._name or ""},
+            errors=errors,
+        )
+
     # ---- pairing (HAI-003) -------------------------------------------------------
 
     async def async_step_pair(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
@@ -178,7 +214,7 @@ class RoboAlarmsConfigFlow(ConfigFlow, domain=DOMAIN):
             except PairingFailed as err:
                 await self._async_close_client()
                 errors["base"] = "not_pairing" if err.reason in _PAIR_ERRORS else "cannot_connect"
-            except (CannotConnect, InvalidMessage):
+            except (CannotConnect, InvalidMessage, TimeoutError):
                 await self._async_close_client()
                 errors["base"] = "cannot_connect"
             else:
@@ -208,7 +244,7 @@ class RoboAlarmsConfigFlow(ConfigFlow, domain=DOMAIN):
         except PairingFailed as err:
             self._fail = f"pair_{err.reason}" if err.reason != "unknown" else "cannot_connect"
             return self.async_show_progress_done(next_step_id="pair_failed")
-        except (CannotConnect, InvalidMessage):
+        except (CannotConnect, InvalidMessage, TimeoutError):
             self._fail = "cannot_connect"
             return self.async_show_progress_done(next_step_id="pair_failed")
         finally:
@@ -218,19 +254,19 @@ class RoboAlarmsConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_pair_done(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Paired: pin the panel and create the entry."""
+        """Paired: pin the panel; create the entry, or repair the old one."""
         await self._async_close_client()
         assert self._key_pem is not None and self._cert_pem is not None
-        return self.async_create_entry(
-            title=self._name or "RoboAlarms Panel",
-            data={
-                CONF_HOST: self._host,
-                CONF_PORT: self._port,
-                CONF_PANEL_FP: self._panel_fp.hex(),
-                CONF_CLIENT_KEY: self._key_pem,
-                CONF_CLIENT_CERT: self._cert_pem,
-            },
-        )
+        data = {
+            CONF_HOST: self._host,
+            CONF_PORT: self._port,
+            CONF_PANEL_FP: self._panel_fp.hex(),
+            CONF_CLIENT_KEY: self._key_pem,
+            CONF_CLIENT_CERT: self._cert_pem,
+        }
+        if self.source == config_entries.SOURCE_REAUTH:
+            return self.async_update_reload_and_abort(self._get_reauth_entry(), data_updates=data)
+        return self.async_create_entry(title=self._name or "RoboAlarms Panel", data=data)
 
     async def async_step_pair_failed(
         self, user_input: dict[str, Any] | None = None
