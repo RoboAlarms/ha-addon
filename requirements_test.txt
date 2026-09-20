@@ -1,0 +1,4 @@
+# Pulls in a matching homeassistant release and the pytest plugins the core
+# test helpers need. Unpinned on purpose: CI should tell us when a new Home
+# Assistant release breaks the integration.
+pytest-homeassistant-custom-component
