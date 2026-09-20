@@ -127,9 +127,9 @@ but the MQTT path remains supported by the panel firmware.
 
 | Milestone | Scope | Status |
 |---|---|---|
-| Panel local API | TLS server, pairing, state, events, commands in the panel firmware | In progress |
-| Protocol client | `aioroboalarms` Python package | Planned |
-| This integration | Config flow, entities, diagnostics, repairs | Scaffolded — config flow and CI in place, wired to the client as it lands |
+| Panel local API | TLS server, pairing, state, events, commands in the panel firmware | Discovery, hello and pairing built; state, events and commands in progress |
+| Protocol client | `aioroboalarms` (inside this integration until it moves to PyPI) | Framing, hello and pairing done, tested against a fake panel |
+| This integration | Config flow, entities, diagnostics, repairs | Discovery, connection test and on-panel pairing done; entities next |
 | Two-way | HA entities as panel zones, panel device control | Planned |
 
 ## Contributing

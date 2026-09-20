@@ -13,6 +13,11 @@ ZEROCONF_TYPE = "_roboalarms._tcp.local."
 
 # TXT record keys the panel advertises. Draft: the protocol spec lives with
 # the panel firmware (alarm_proto) and these are finalized together with it.
+# Config entry data (an external contract once released: add, never rename).
+CONF_PANEL_FP = "panel_fp"  # hex SHA-256 of the panel's certificate, pinned at pairing
+CONF_CLIENT_KEY = "client_key"  # this entry's private key (PEM)
+CONF_CLIENT_CERT = "client_cert"  # this entry's certificate (PEM); the panel pins its hash
+
 ZC_PROP_ID = "id"  # panel id (stable, lowercase hex)
 ZC_PROP_NAME = "name"  # the panel's friendly name
 ZC_PROP_MODEL = "model"

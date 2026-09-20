@@ -41,22 +41,28 @@ Nothing released yet:
   run against a fake asyncio panel and share golden pairing vectors verbatim with the panel's
   `host/tests/test_link.c`: change the derivation and one of the two suites fails.
 - config flow: manual (host/port) and zeroconf steps, unique id from the panel id, discovery
-  updates a known entry's address (HAI-004), connection tested before the entry is created
-  and the flow recovers from failures. It speaks the real protocol — it will connect as soon
-  as the panel firmware's `ha_link` exists (being built in the panel repo now).
+  updates a known entry's address (HAI-004), connection tested before anything is created,
+  then **pairing** (HAI-003): the flow instructs to open pairing on the panel, starts the
+  commitment exchange, shows the 6-digit code in a progress step until Allow is tapped on the
+  panel, and the entry stores the client identity (generated per flow with `cryptography`)
+  plus the panel's pinned certificate fingerprint (`const.py` CONF_* keys). The panel side
+  (`ha_link` in the firmware repo) is built and compiles, not yet run on hardware.
 - `__init__.py` forwards to an empty platform list; `strings.json` = `translations/en.json`.
 - brand icon is a generated placeholder (shield + check); `docs/panel-home.png` is the real
   panel's Home screen from the firmware repo's UI preview (regenerate there, shot 01).
 - CI: hassfest + HACS validation, pytest, ruff.
 
 **Next steps (M12 order, from Features/23 tasks):**
-1. Panel side: `ha_link` (mDNS, TLS server, pairing over `proto_pair`) — in the panel repo.
-2. Pairing step in the config flow (HAI-003: show progress, the code lives on both screens),
-   TLS with certificate pinning in `aiopanel.py`, then reauth and reconfigure.
-3. Platforms: `alarm_control_panel` first, then binary_sensor, sensor, switch, button,
-   event, update (HAI-005..008); push coordinator; diagnostics and repairs (HAI-011).
+1. Protocol: snapshot/delta/event/command/result messages (spec first, in the panel repo's
+   protocol.md, then both implementations with shared goldens).
+2. Push coordinator + platforms: `alarm_control_panel` first, then binary_sensor, sensor,
+   switch, button, event, update (HAI-005..008); entities unavailable on link loss.
+3. Pinned-fingerprint verification on the paired connection in `__init__.py`'s setup
+   (compare `PanelClient.panel_cert_der` to CONF_PANEL_FP, else reauth), reauth and
+   reconfigure flows, diagnostics and repairs (HAI-011, HAI-013).
 4. Split `aiopanel.py` out as `aioroboalarms` on PyPI when it stabilizes.
-5. First GitHub release when a panel can actually pair; HACS default-store inclusion later.
+5. First GitHub release when a real panel pairs end to end (needs the owner's panel);
+   HACS default-store inclusion later.
 
 **Open items:**
 - ~~Product name and domain~~ decided (owner, 2026-09-20): the project is **RoboAlarms**,

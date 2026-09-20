@@ -13,15 +13,26 @@
       "confirm": {
         "title": "RoboAlarms Panel found",
         "description": "Do you want to add {name} ({host}) to Home Assistant?\n\nYou will confirm the pairing on the panel's screen."
+      },
+      "pair": {
+        "title": "Pair with the panel",
+        "description": "On the panel, open Settings > Integrations > Home Assistant and tap **Pair with Home Assistant** (it asks for the master or installer code). Pairing stays open for two minutes.\n\nThen continue here."
       }
+    },
+    "progress": {
+      "wait_allow": "Both screens must show the same code:\n\n# {code}\n\nIf the panel shows the same six digits, tap **The codes match – allow** on it. If they differ, reject it there."
     },
     "error": {
       "cannot_connect": "Could not reach the panel. Check that it is powered, on the same network, and that the Home Assistant integration is enabled on the panel (Settings > Integrations > Home Assistant).",
-      "unsupported": "The panel speaks a different version of the link protocol. Update this integration and the panel's firmware to their latest versions."
+      "unsupported": "The panel speaks a different version of the link protocol. Update this integration and the panel's firmware to their latest versions.",
+      "not_pairing": "The panel isn't pairing right now. Open pairing on its screen first, then try again."
     },
     "abort": {
       "already_configured": "This panel is already configured. Its address was updated.",
-      "unknown": "The discovered device did not identify itself as a RoboAlarms Panel."
+      "unknown": "The discovered device did not identify itself as a RoboAlarms Panel.",
+      "pair_rejected": "The panel rejected the pairing.",
+      "pair_timeout": "Pairing timed out on the panel. Open it again and retry.",
+      "pair_mismatch": "The pairing could not be trusted and was stopped. Try again on a network you trust."
     }
   }
 }

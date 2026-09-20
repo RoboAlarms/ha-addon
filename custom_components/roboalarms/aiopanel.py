@@ -14,7 +14,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import secrets
+import ssl as ssl_mod
+import tempfile
 from dataclasses import dataclass
+from datetime import UTC
+from pathlib import Path
 from ssl import SSLContext
 from typing import Any
 
@@ -43,6 +48,14 @@ class UnsupportedVersion(LinkError):
     """The panel speaks a protocol version this client does not."""
 
 
+class PairingFailed(LinkError):
+    """The panel answered a pairing attempt with a failure result."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"pairing failed: {reason}")
+        self.reason = reason
+
+
 @dataclass
 class PanelInfo:
     """What the panel's hello reports."""
@@ -64,6 +77,64 @@ def pair_code(nonce_ha: bytes, nonce_panel: bytes, fp_ha: bytes, fp_panel: bytes
     """The 6-digit code both screens show (protocol.md, "Code derivation")."""
     digest = hashlib.sha256(_PAIR_CONTEXT + nonce_ha + nonce_panel + fp_ha + fp_panel).digest()
     return str(int.from_bytes(digest[:4], "big") % 1_000_000).zfill(6)
+
+
+def generate_client_identity() -> tuple[str, str]:
+    """A fresh P-256 key and self-signed certificate (PEM): this client's identity.
+
+    Generated once per config entry and kept in it; the panel pins its SHA-256
+    fingerprint at pairing, so losing it means pairing again.
+    """
+    from datetime import datetime, timedelta
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "aioroboalarms")])
+    now = datetime.now(UTC)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(days=1))
+        .not_valid_after(now + timedelta(days=365 * 50))
+        .sign(key, hashes.SHA256())
+    )
+    key_pem = key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode()
+    cert_pem = cert.public_bytes(serialization.Encoding.PEM).decode()
+    return key_pem, cert_pem
+
+
+def cert_der_from_pem(cert_pem: str) -> bytes:
+    """The certificate's DER bytes (what fingerprints are computed over)."""
+    from cryptography import x509
+    from cryptography.hazmat.primitives import serialization
+
+    return x509.load_pem_x509_certificate(cert_pem.encode()).public_bytes(
+        serialization.Encoding.DER
+    )
+
+
+def client_ssl_context(key_pem: str, cert_pem: str) -> SSLContext:
+    """A TLS context presenting the client identity; the panel is checked by its
+    pinned fingerprint after the handshake, not by a certificate authority."""
+    ctx = ssl_mod.SSLContext(ssl_mod.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl_mod.CERT_NONE
+    with tempfile.TemporaryDirectory() as tmp:
+        cert_file = Path(tmp) / "client.pem"
+        cert_file.write_text(cert_pem + key_pem)
+        ctx.load_cert_chain(cert_file)
+    return ctx
 
 
 def encode_frame(message: dict[str, Any]) -> bytes:
@@ -102,6 +173,8 @@ class PanelClient:
         self._ssl = ssl
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
+        self._pair_nonce = b""
+        self._pair_fp_panel = b""
         self.info: PanelInfo | None = None
 
     async def connect(self, timeout: float = _CONNECT_TIMEOUT) -> PanelInfo:
@@ -154,6 +227,58 @@ class PanelClient:
                 return await read_frame(self._reader)
         except TimeoutError as err:
             raise CannotConnect("the panel stopped answering") from err
+
+    @property
+    def panel_cert_der(self) -> bytes | None:
+        """The panel certificate as seen on the wire (None on a plain connection)."""
+        if self._writer is None:
+            return None
+        ssl_object = self._writer.get_extra_info("ssl_object")
+        if ssl_object is None:
+            return None
+        return ssl_object.getpeercert(binary_form=True)
+
+    async def pair_begin(self, client_cert_der: bytes, panel_cert_der: bytes | None = None) -> str:
+        """Start pairing on an open connection and return the 6-digit code.
+
+        The commitment goes out before the panel's nonce arrives (protocol.md,
+        "Pairing"), so neither side can steer the code. panel_cert_der defaults
+        to the certificate of this TLS connection.
+        """
+        if panel_cert_der is None:
+            panel_cert_der = self.panel_cert_der
+        if panel_cert_der is None:
+            raise InvalidMessage("no panel certificate to derive the pairing code from")
+        self._pair_nonce = secrets.token_bytes(32)
+        await self.send({"t": "pair_start", "commit": pair_commit(self._pair_nonce)})
+        msg = await self.recv(timeout=30)
+        if msg.get("t") == "pair_result":
+            raise PairingFailed(str(msg.get("result") or "unknown"))
+        if msg.get("t") != "pair_nonce":
+            raise InvalidMessage(f"expected pair_nonce, got {msg.get('t')!r}")
+        nonce_hex = msg.get("nonce")
+        if not isinstance(nonce_hex, str):
+            raise InvalidMessage("pair_nonce without a nonce")
+        try:
+            nonce_panel = bytes.fromhex(nonce_hex)
+        except ValueError as err:
+            raise InvalidMessage("pair_nonce isn't hex") from err
+        if len(nonce_panel) != 32:
+            raise InvalidMessage("pair_nonce has the wrong length")
+        await self.send({"t": "pair_reveal", "nonce": self._pair_nonce.hex()})
+        fp_ha = hashlib.sha256(client_cert_der).digest()
+        self._pair_fp_panel = hashlib.sha256(panel_cert_der).digest()
+        return pair_code(self._pair_nonce, nonce_panel, fp_ha, self._pair_fp_panel)
+
+    async def pair_wait(self, timeout: float = 130.0) -> bytes:
+        """Wait for the person at the panel; returns the panel fingerprint to pin."""
+        msg = await self.recv(timeout=timeout)
+        if msg.get("t") != "pair_result":
+            raise InvalidMessage(f"expected pair_result, got {msg.get('t')!r}")
+        result = str(msg.get("result") or "unknown")
+        if result != "paired":
+            raise PairingFailed(result)
+        return self._pair_fp_panel
 
     async def close(self) -> None:
         """Close the connection; safe to call twice or before connecting."""

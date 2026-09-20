@@ -1,32 +1,44 @@
 """Config flow for the RoboAlarms Panel integration.
 
-Covers discovery (zeroconf) and manual entry. The connection is always
-tested before an entry is created (HAI-004); a discovered panel whose entry
-already exists gets its host updated instead of a duplicate.
+Discovery (zeroconf) or manual entry, then the connection is tested before
+anything is created (HAI-004), then pairing (HAI-003): the flow starts the
+commitment exchange, both screens show the same 6-digit code, and the entry
+is created when the person at the panel taps Allow. The entry keeps this
+client's key and certificate and the panel's pinned fingerprint.
 
-The connection test speaks the real link protocol (aiopanel.py): it will
-succeed as soon as the panel firmware's TLS API exists. The pairing step
-(HAI-003), reauth and reconfigure land together with that firmware.
+A discovered panel whose entry already exists gets its host updated instead
+of a duplicate. Reauth and reconfigure land next.
 """
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_HOST, CONF_PORT
-from homeassistant.core import HomeAssistant
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
 from .aiopanel import (
     CannotConnect,
     InvalidMessage,
+    PairingFailed,
     PanelClient,
-    PanelInfo,
     UnsupportedVersion,
+    cert_der_from_pem,
+    client_ssl_context,
+    generate_client_identity,
 )
-from .const import DEFAULT_PORT, DOMAIN, ZC_PROP_ID, ZC_PROP_NAME
+from .const import (
+    CONF_CLIENT_CERT,
+    CONF_CLIENT_KEY,
+    CONF_PANEL_FP,
+    DEFAULT_PORT,
+    DOMAIN,
+    ZC_PROP_ID,
+    ZC_PROP_NAME,
+)
 
 STEP_USER_DATA_SCHEMA = vol.Schema(
     {
@@ -35,14 +47,7 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
     }
 )
 
-
-async def _async_validate_connection(hass: HomeAssistant, host: str, port: int) -> PanelInfo:
-    """Connect to the panel and read its hello."""
-    client = PanelClient(host, port)
-    try:
-        return await client.connect()
-    finally:
-        await client.close()
+_PAIR_ERRORS = {"not_pairing", "busy", "timeout"}
 
 
 class RoboAlarmsConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -55,37 +60,75 @@ class RoboAlarmsConfigFlow(ConfigFlow, domain=DOMAIN):
         self._host: str | None = None
         self._port: int = DEFAULT_PORT
         self._name: str | None = None
+        self._key_pem: str | None = None
+        self._cert_pem: str | None = None
+        self._ssl = None
+        self._client: PanelClient | None = None
+        self._code = ""
+        self._panel_fp = b""
+        self._fail = "cannot_connect"
+        self._pair_task: asyncio.Task | None = None
 
-    async def _async_try_create(
-        self, host: str, port: int, errors: dict[str, str]
-    ) -> ConfigFlowResult | None:
-        """Test the connection and create the entry; None = show the form again."""
+    # ---- plumbing ----------------------------------------------------------------
+
+    async def _async_ensure_identity(self) -> None:
+        """This flow's client identity: one key pair for validate, pair and entry."""
+        if self._key_pem is None:
+            self._key_pem, self._cert_pem = await self.hass.async_add_executor_job(
+                generate_client_identity
+            )
+            self._ssl = await self.hass.async_add_executor_job(
+                client_ssl_context, self._key_pem, self._cert_pem
+            )
+
+    async def _async_connect(self) -> PanelClient:
+        """Open a connection and exchange hellos (the test-before-configure)."""
+        await self._async_ensure_identity()
+        assert self._host is not None
+        client = PanelClient(self._host, self._port, ssl=self._ssl)
         try:
-            info = await _async_validate_connection(self.hass, host, port)
+            await client.connect()
+        except Exception:
+            await client.close()
+            raise
+        return client
+
+    async def _async_close_client(self) -> None:
+        if self._client is not None:
+            await self._client.close()
+            self._client = None
+
+    async def _async_validate(self, errors: dict[str, str]) -> bool:
+        """Test the connection; on success the flow's unique id and name are set."""
+        try:
+            client = await self._async_connect()
         except CannotConnect:
             errors["base"] = "cannot_connect"
+            return False
         except InvalidMessage:
             errors["base"] = "cannot_connect"
+            return False
         except UnsupportedVersion:
             errors["base"] = "unsupported"
-        else:
-            await self.async_set_unique_id(info.panel_id, raise_on_progress=False)
-            self._abort_if_unique_id_configured(updates={CONF_HOST: host, CONF_PORT: port})
-            return self.async_create_entry(
-                title=info.name or f"Panel {info.panel_id}",
-                data={CONF_HOST: host, CONF_PORT: port},
-            )
-        return None
+            return False
+        info = client.info
+        await client.close()
+        assert info is not None
+        await self.async_set_unique_id(info.panel_id, raise_on_progress=False)
+        self._abort_if_unique_id_configured(updates={CONF_HOST: self._host, CONF_PORT: self._port})
+        self._name = info.name or f"Panel {info.panel_id}"
+        return True
+
+    # ---- entry points ------------------------------------------------------------
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Handle manual entry of the panel's address."""
         errors: dict[str, str] = {}
         if user_input is not None:
-            result = await self._async_try_create(
-                user_input[CONF_HOST], user_input[CONF_PORT], errors
-            )
-            if result is not None:
-                return result
+            self._host = user_input[CONF_HOST]
+            self._port = user_input[CONF_PORT]
+            if await self._async_validate(errors):
+                return await self.async_step_pair()
         return self.async_show_form(
             step_id="user", data_schema=STEP_USER_DATA_SCHEMA, errors=errors
         )
@@ -113,12 +156,85 @@ class RoboAlarmsConfigFlow(ConfigFlow, domain=DOMAIN):
         """Confirm adding a discovered panel."""
         errors: dict[str, str] = {}
         if user_input is not None:
-            assert self._host is not None
-            result = await self._async_try_create(self._host, self._port, errors)
-            if result is not None:
-                return result
+            if await self._async_validate(errors):
+                return await self.async_step_pair()
         return self.async_show_form(
             step_id="confirm",
             description_placeholders={"name": self._name or "", "host": self._host or ""},
             errors=errors,
         )
+
+    # ---- pairing (HAI-003) -------------------------------------------------------
+
+    async def async_step_pair(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Ask the user to open pairing on the panel, then start the exchange."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            try:
+                self._client = await self._async_connect()
+                assert self._cert_pem is not None
+                cert_der = await self.hass.async_add_executor_job(cert_der_from_pem, self._cert_pem)
+                self._code = await self._client.pair_begin(cert_der)
+            except PairingFailed as err:
+                await self._async_close_client()
+                errors["base"] = "not_pairing" if err.reason in _PAIR_ERRORS else "cannot_connect"
+            except (CannotConnect, InvalidMessage):
+                await self._async_close_client()
+                errors["base"] = "cannot_connect"
+            else:
+                return await self.async_step_pair_wait()
+        return self.async_show_form(
+            step_id="pair",
+            description_placeholders={"name": self._name or ""},
+            errors=errors,
+        )
+
+    async def async_step_pair_wait(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Both screens show the code; wait for Allow on the panel."""
+        assert self._client is not None
+        if self._pair_task is None:
+            self._pair_task = self.hass.async_create_task(self._client.pair_wait())
+        if not self._pair_task.done():
+            return self.async_show_progress(
+                step_id="pair_wait",
+                progress_action="wait_allow",
+                progress_task=self._pair_task,
+                description_placeholders={"code": self._code},
+            )
+        try:
+            self._panel_fp = self._pair_task.result()
+        except PairingFailed as err:
+            self._fail = f"pair_{err.reason}" if err.reason != "unknown" else "cannot_connect"
+            return self.async_show_progress_done(next_step_id="pair_failed")
+        except (CannotConnect, InvalidMessage):
+            self._fail = "cannot_connect"
+            return self.async_show_progress_done(next_step_id="pair_failed")
+        finally:
+            self._pair_task = None
+        return self.async_show_progress_done(next_step_id="pair_done")
+
+    async def async_step_pair_done(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Paired: pin the panel and create the entry."""
+        await self._async_close_client()
+        assert self._key_pem is not None and self._cert_pem is not None
+        return self.async_create_entry(
+            title=self._name or "RoboAlarms Panel",
+            data={
+                CONF_HOST: self._host,
+                CONF_PORT: self._port,
+                CONF_PANEL_FP: self._panel_fp.hex(),
+                CONF_CLIENT_KEY: self._key_pem,
+                CONF_CLIENT_CERT: self._cert_pem,
+            },
+        )
+
+    async def async_step_pair_failed(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """The panel said no (or the window closed): end the flow with the reason."""
+        await self._async_close_client()
+        return self.async_abort(reason=self._fail)
