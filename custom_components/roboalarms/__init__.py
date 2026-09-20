@@ -1,6 +1,6 @@
-"""The AlarmSystem integration.
+"""The RoboAlarms integration.
 
-A local-push integration for the AlarmSystem touchscreen alarm panel:
+A local-push integration for the RoboAlarms touchscreen alarm panel:
 mDNS discovery, pairing confirmed on the panel's screen, then a mutual-TLS
 connection carrying state, events and commands. No cloud, no MQTT broker.
 """
@@ -17,9 +17,9 @@ PLATFORMS: list[Platform] = []
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up an AlarmSystem panel from a config entry."""
+    """Set up a RoboAlarms panel from a config entry."""
     # The connection and push coordinator arrive with the protocol client
-    # (aioalarmsystem); until it exists the config flow cannot create an
+    # (aioroboalarms); until it exists the config flow cannot create an
     # entry, so this is never reached in practice.
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True

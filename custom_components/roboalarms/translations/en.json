@@ -4,14 +4,14 @@
     "step": {
       "user": {
         "title": "Connect to your panel",
-        "description": "Enter the address of the AlarmSystem panel on your network. You can find it on the panel under Settings > Integrations > Home Assistant.",
+        "description": "Enter the address of the RoboAlarms Panel on your network. You can find it on the panel under Settings > Integrations > Home Assistant.",
         "data": {
           "host": "Host",
           "port": "Port"
         }
       },
       "confirm": {
-        "title": "AlarmSystem panel found",
+        "title": "RoboAlarms Panel found",
         "description": "Do you want to add {name} ({host}) to Home Assistant?\n\nYou will confirm the pairing on the panel's screen."
       }
     },
@@ -20,7 +20,7 @@
     },
     "abort": {
       "already_configured": "This panel is already configured. Its address was updated.",
-      "unknown": "The discovered device did not identify itself as an AlarmSystem panel."
+      "unknown": "The discovered device did not identify itself as a RoboAlarms Panel."
     }
   }
 }

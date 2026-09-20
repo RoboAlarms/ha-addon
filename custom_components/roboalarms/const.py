@@ -1,15 +1,15 @@
-"""Constants for the AlarmSystem integration."""
+"""Constants for the RoboAlarms integration."""
 
 from __future__ import annotations
 
-DOMAIN = "alarmsystem"
+DOMAIN = "roboalarms"
 
 # The panel's local API (TLS over TCP, u32-length-prefixed JSON frames).
 DEFAULT_PORT = 6054
 
 # mDNS service the panel advertises while the integration is enabled on it
 # (HAI-001). Must match the zeroconf matcher in manifest.json.
-ZEROCONF_TYPE = "_alarmsystem._tcp.local."
+ZEROCONF_TYPE = "_roboalarms._tcp.local."
 
 # TXT record keys the panel advertises. Draft: the protocol spec lives with
 # the panel firmware (alarm_proto) and these are finalized together with it.

@@ -15,16 +15,18 @@ Guidance for AI assistants working in this repository.
    `PANEL.local.md`, never here.
 
 ## What this is
-The **HACS custom integration** (domain `alarmsystem`) for the AlarmSystem panel — an
-open-source touchscreen alarm panel on the Elecrow CrowPanel Advanced 7" (ESP32-P4). Despite
+The **HACS custom integration** (domain `roboalarms`) for the **RoboAlarms Panel** — an
+open-source touchscreen alarm panel on the Elecrow CrowPanel Advanced 7" (ESP32-P4). The
+project is RoboAlarms; the device is the RoboAlarms Panel (owner's decision, 2026-09-20).
+Despite
 the repository's name, this is **not** a Supervisor add-on: the add-on route was considered
 and rejected (Features/23, "Why a HACS integration"). Milestones: **M12** (discovery, pairing,
 entities, commands) and **M13** (two-way: HA entities as panel zones, panel device control).
 
 | Path | What |
 |---|---|
-| `custom_components/alarmsystem/` | the integration: manifest, config flow, strings; platforms arrive as they are built |
-| `custom_components/alarmsystem/brand/` | icon shown by HA/HACS (HA 2026.3+ serves it from here; home-assistant/brands no longer takes custom-integration PRs) |
+| `custom_components/roboalarms/` | the integration: manifest, config flow, strings; platforms arrive as they are built |
+| `custom_components/roboalarms/brand/` | icon shown by HA/HACS (HA 2026.3+ serves it from here; home-assistant/brands no longer takes custom-integration PRs) |
 | `tests/` | pytest with `pytest-homeassistant-custom-component` |
 | `scripts/placeholder_icon.py` | regenerates the placeholder brand icon (stdlib only, no Pillow) |
 | `.github/workflows/` | `validate.yml` (hassfest + HACS action), `tests.yml` (pytest + ruff) |
@@ -34,7 +36,7 @@ entities, commands) and **M13** (two-way: HA entities as panel zones, panel devi
 Scaffolded, nothing released yet:
 - config flow: manual (host/port) and zeroconf steps, unique id from the panel id TXT key,
   discovery updates a known entry's address (HAI-004). The connection test is a **stub that
-  always raises CannotConnect** — the panel's TLS API and the `aioalarmsystem` client don't
+  always raises CannotConnect** — the panel's TLS API and the `aioroboalarms` client don't
   exist yet, so no entry can be created. Honest by design; tests pin this behaviour.
 - `__init__.py` forwards to an empty platform list; `strings.json` = `translations/en.json`.
 - brand icon is a generated placeholder (shield + check); replace when the project has real
@@ -44,7 +46,7 @@ Scaffolded, nothing released yet:
 **Next steps (M12 order, from Features/23 tasks):**
 1. Protocol spec and `alarm_proto` codecs + pairing-code derivation in the panel repo
    (host-tested; golden vectors shared with the Python tests here).
-2. `aioalarmsystem` on PyPI (asyncio client, fake panel for tests) — planned as its own
+2. `aioroboalarms` on PyPI (asyncio client, fake panel for tests) — planned as its own
    repository so this integration can move toward HA core later; decide when it starts.
 3. Wire `_async_validate_connection` to the client; pairing step in the config flow
    (HAI-003), then reauth and reconfigure (HAI-004).
@@ -53,9 +55,12 @@ Scaffolded, nothing released yet:
 5. First GitHub release when a panel can actually pair; HACS default-store inclusion later.
 
 **Open items:**
-- Product name and domain: "AlarmSystem" / `alarmsystem` are the working names. The domain
-  and entity unique ids become an external contract at the **first release** — decide the
-  final name before then (Features/23 open question). Renaming later breaks users.
+- ~~Product name and domain~~ decided (owner, 2026-09-20): the project is **RoboAlarms**,
+  the device the **RoboAlarms Panel**, the domain `roboalarms`, the mDNS type
+  `_roboalarms._tcp`. The domain and entity unique ids still freeze for good at the
+  **first release**; until then a rename is possible but needs the owner's say.
+- No Honeywell mentions in this public repository (owner, 2026-09-20): Honeywell behaviour
+  was reference material while designing the panel, not something this repo advertises.
 - GitHub repository description and topics (e.g. `home-assistant`, `hacs-integration`,
   `alarm-panel`) must be set on GitHub, or the HACS validation action fails.
 - The README's mention of the panel firmware gets a link once `RoboAlarms/alarm-panel` is

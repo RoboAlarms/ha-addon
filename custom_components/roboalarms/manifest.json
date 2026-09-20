@@ -1,6 +1,6 @@
 {
-  "domain": "alarmsystem",
-  "name": "AlarmSystem",
+  "domain": "roboalarms",
+  "name": "RoboAlarms Panel",
   "codeowners": ["@RoboAlarms"],
   "config_flow": true,
   "documentation": "https://github.com/RoboAlarms/ha-addon",
@@ -8,5 +8,5 @@
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/RoboAlarms/ha-addon/issues",
   "version": "0.1.0",
-  "zeroconf": ["_alarmsystem._tcp.local."]
+  "zeroconf": ["_roboalarms._tcp.local."]
 }

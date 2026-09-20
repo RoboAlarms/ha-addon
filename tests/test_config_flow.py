@@ -1,4 +1,4 @@
-"""Tests for the AlarmSystem config flow.
+"""Tests for the RoboAlarms config flow.
 
 The connection test is still a stub (the panel's TLS API is being built
 first), so entry creation cannot be tested yet: these tests pin down the
@@ -15,13 +15,13 @@ from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.alarmsystem.const import DOMAIN
+from custom_components.roboalarms.const import DOMAIN
 
 DISCOVERY = ZeroconfServiceInfo(
     ip_address=ip_address("192.168.1.50"),
     ip_addresses=[ip_address("192.168.1.50")],
-    hostname="alarmsystem-0a1b2c.local.",
-    name="Home._alarmsystem._tcp.local.",
+    hostname="roboalarms-0a1b2c.local.",
+    name="Home._roboalarms._tcp.local.",
     port=6054,
     properties={
         "id": "0a1b2c",
@@ -31,7 +31,7 @@ DISCOVERY = ZeroconfServiceInfo(
         "api": "1",
         "paired": "0",
     },
-    type="_alarmsystem._tcp.local.",
+    type="_roboalarms._tcp.local.",
 )
 
 
@@ -93,10 +93,10 @@ async def test_zeroconf_without_panel_id_aborts(hass: HomeAssistant) -> None:
         ip_address=ip_address("192.168.1.51"),
         ip_addresses=[ip_address("192.168.1.51")],
         hostname="mystery.local.",
-        name="Mystery._alarmsystem._tcp.local.",
+        name="Mystery._roboalarms._tcp.local.",
         port=6054,
         properties={},
-        type="_alarmsystem._tcp.local.",
+        type="_roboalarms._tcp.local.",
     )
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": config_entries.SOURCE_ZEROCONF}, data=anonymous

@@ -1,10 +1,10 @@
-"""Config flow for the AlarmSystem integration.
+"""Config flow for the RoboAlarms integration.
 
 Covers discovery (zeroconf) and manual entry. The connection is always
 tested before an entry is created (HAI-004); a discovered panel whose entry
 already exists gets its host updated instead of a duplicate.
 
-The connection test is a stub until the protocol client (aioalarmsystem)
+The connection test is a stub until the protocol client (aioroboalarms)
 exists: the panel side of the API is built first, so for now every attempt
 reports "cannot connect". Reauth and reconfigure follow with the client.
 """
@@ -42,13 +42,13 @@ class PanelInfo:
 async def _async_validate_connection(hass: HomeAssistant, host: str, port: int) -> PanelInfo:
     """Connect to the panel and read its hello.
 
-    TODO(M12): wire up aioalarmsystem once the panel's TLS API exists.
+    TODO(M12): wire up aioroboalarms once the panel's TLS API exists.
     """
     raise CannotConnect
 
 
-class AlarmSystemConfigFlow(ConfigFlow, domain=DOMAIN):
-    """Handle the config flow for an AlarmSystem panel."""
+class RoboAlarmsConfigFlow(ConfigFlow, domain=DOMAIN):
+    """Handle the config flow for a RoboAlarms panel."""
 
     VERSION = 1
 

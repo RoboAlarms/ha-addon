@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="custom_components/alarmsystem/brand/icon@2x.png" width="120" alt="AlarmSystem icon">
+  <img src="custom_components/roboalarms/brand/icon@2x.png" width="120" alt="RoboAlarms icon">
 </p>
 
-<h1 align="center">AlarmSystem for Home Assistant</h1>
+<h1 align="center">RoboAlarms Panel for Home Assistant</h1>
 
 <p align="center">
   <a href="https://github.com/RoboAlarms/ha-addon/actions/workflows/validate.yml"><img src="https://github.com/RoboAlarms/ha-addon/actions/workflows/validate.yml/badge.svg" alt="Validate"></a>
@@ -12,8 +12,8 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/RoboAlarms/ha-addon" alt="License"></a>
 </p>
 
-A local integration for the **AlarmSystem panel** — an open-source, Honeywell-style
-touchscreen alarm panel built on the Elecrow CrowPanel Advanced 7″ (ESP32-P4).
+A local integration for the **RoboAlarms Panel** — an open-source touchscreen alarm
+panel built on the Elecrow CrowPanel Advanced 7″ (ESP32-P4).
 Home Assistant discovers the panel on your network, you confirm the pairing **on the
 panel's screen**, and the panel shows up with its partitions, zones, troubles and
 events. Everything stays on your LAN: no cloud, no MQTT broker, no credentials to type.
@@ -25,7 +25,7 @@ events. Everything stays on your LAN: no cloud, no MQTT broker, no credentials t
 
 ## How it works
 
-1. The panel advertises itself with mDNS (`_alarmsystem._tcp`) while its Home
+1. The panel advertises itself with mDNS (`_roboalarms._tcp`) while its Home
    Assistant integration is switched on (panel: *Settings > Integrations > Home Assistant*).
 2. Home Assistant shows it under **Settings > Devices & services > Discovered**.
 3. You click **Add**, open the pairing screen on the panel, and check that both
@@ -62,7 +62,7 @@ may show on its own Devices screen. The panel only ever sees what you allow.
 ## Requirements
 
 - Home Assistant **2026.3 or newer**
-- An AlarmSystem panel on the same network (mDNS discovery needs the same subnet,
+- A RoboAlarms Panel on the same network (mDNS discovery needs the same subnet,
   or an mDNS reflector across VLANs)
 - The integration enabled on the panel: *Settings > Integrations > Home Assistant*
 
@@ -74,19 +74,19 @@ may show on its own Devices screen. The panel only ever sees what you allow.
 
 Or by hand: **HACS > ⋮ > Custom repositories**, add
 `https://github.com/RoboAlarms/ha-addon` with type *Integration*, then search for
-**AlarmSystem**, download it and restart Home Assistant.
+**RoboAlarms**, download it and restart Home Assistant.
 
 ### Manual
 
-Copy `custom_components/alarmsystem` into the `custom_components` folder of your
+Copy `custom_components/roboalarms` into the `custom_components` folder of your
 Home Assistant configuration directory and restart Home Assistant.
 
 ## Setup
 
-[![Open your Home Assistant instance and start setting up a new integration.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=alarmsystem)
+[![Open your Home Assistant instance and start setting up a new integration.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=roboalarms)
 
 1. The panel appears under **Settings > Devices & services > Discovered** — click
-   **Add**. (No discovery? *Add integration*, search for **AlarmSystem** and enter
+   **Add**. (No discovery? *Add integration*, search for **RoboAlarms** and enter
    the panel's address; it's shown on the panel under *Settings > Integrations*.)
 2. On the panel, open *Settings > Integrations > Home Assistant* and tap **Pair**
    (the panel asks for your master or installer code; pairing stays open for two
@@ -122,7 +122,7 @@ but the MQTT path remains supported by the panel firmware.
 | Milestone | Scope | Status |
 |---|---|---|
 | Panel local API | TLS server, pairing, state, events, commands in the panel firmware | In progress |
-| Protocol client | `aioalarmsystem` Python package | Planned |
+| Protocol client | `aioroboalarms` Python package | Planned |
 | This integration | Config flow, entities, diagnostics, repairs | Scaffolded — config flow and CI in place, wired to the client as it lands |
 | Two-way | HA entities as panel zones, panel device control | Planned |
 

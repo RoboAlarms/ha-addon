@@ -3,7 +3,7 @@
 
 Renders at 6x (1536px) with scanline polygon fill, box-downsamples to
 icon.png (256x256) and icon@2x.png (512x512) in
-custom_components/alarmsystem/brand/. Standard library only.
+custom_components/roboalarms/brand/. Standard library only.
 
 This is a placeholder until the project has real branding; rerun after
 tweaking the shapes below.
@@ -144,7 +144,7 @@ def main():
     for poly in thick_polyline([(103.0, 125.0), (121.0, 143.0), (154.0, 103.0)], 15.0):
         fill_polygon(px, poly, TEAL)
 
-    out_dir = Path(__file__).resolve().parents[1] / "custom_components" / "alarmsystem" / "brand"
+    out_dir = Path(__file__).resolve().parents[1] / "custom_components" / "roboalarms" / "brand"
     out_dir.mkdir(parents=True, exist_ok=True)
     size, data = downsample(px, S)
     write_png(out_dir / "icon.png", size, data)
