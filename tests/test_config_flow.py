@@ -26,6 +26,7 @@ from custom_components.roboalarms.const import (
     CONF_CLIENT_CERT,
     CONF_CLIENT_KEY,
     CONF_PANEL_FP,
+    CONF_SHARE_ENTITIES,
     DOMAIN,
 )
 
@@ -280,3 +281,22 @@ async def test_zeroconf_without_panel_id_aborts(hass: HomeAssistant) -> None:
     )
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "unknown"
+
+
+async def test_options_choose_what_the_panel_may_see(hass: HomeAssistant) -> None:
+    """The options flow stores the shared entities, empty until asked (HAI-009)."""
+    entry = MockConfigEntry(
+        domain=DOMAIN, unique_id="0a1b2c", data={CONF_HOST: "192.168.1.7", CONF_PORT: 6054}
+    )
+    entry.add_to_hass(hass)
+    assert entry.options.get(CONF_SHARE_ENTITIES) is None
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "init"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_SHARE_ENTITIES: ["binary_sensor.porch"]}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options == {CONF_SHARE_ENTITIES: ["binary_sensor.porch"]}

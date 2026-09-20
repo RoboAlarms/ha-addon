@@ -41,6 +41,20 @@
       "wrong_device": "That address now belongs to a different panel."
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Entities the panel may use as zones",
+        "description": "Choose the binary sensors your panel is allowed to use. Only these are ever sent to the panel: it is told their name, area, device class and state, and nothing else in Home Assistant is offered to it or answered for.\n\nOn the panel, a chosen entity can then be bound to a zone under Settings > Zones.",
+        "data": {
+          "share_entities": "Shared entities"
+        },
+        "data_description": {
+          "share_entities": "Leave this empty and the panel sees nothing from Home Assistant."
+        }
+      }
+    }
+  },
   "entity": {
     "switch": {
       "chime": {

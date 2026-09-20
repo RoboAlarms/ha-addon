@@ -8,6 +8,9 @@ client's key and certificate and the panel's pinned fingerprint.
 
 A discovered panel whose entry already exists gets its host updated instead
 of a duplicate. Reauth and reconfigure land next.
+
+The options flow is the other half of HAI-009: Home Assistant decides which
+entities the panel may see, and nothing outside that list is ever sent.
 """
 
 from __future__ import annotations
@@ -17,8 +20,10 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant import config_entries
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.const import CONF_HOST, CONF_PORT
+from homeassistant.core import callback
+from homeassistant.helpers import selector
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
 from .aiopanel import (
@@ -35,6 +40,7 @@ from .const import (
     CONF_CLIENT_CERT,
     CONF_CLIENT_KEY,
     CONF_PANEL_FP,
+    CONF_SHARE_ENTITIES,
     DEFAULT_PORT,
     DOMAIN,
     ZC_PROP_ID,
@@ -55,6 +61,12 @@ class RoboAlarmsConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle the config flow for a RoboAlarms Panel."""
 
     VERSION = 1
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> RoboAlarmsOptionsFlow:
+        """Options: which entities the panel may use as zones (HAI-009)."""
+        return RoboAlarmsOptionsFlow()
 
     def __init__(self) -> None:
         """Initialize the flow."""
@@ -274,3 +286,27 @@ class RoboAlarmsConfigFlow(ConfigFlow, domain=DOMAIN):
         """The panel said no (or the window closed): end the flow with the reason."""
         await self._async_close_client()
         return self.async_abort(reason=self._fail)
+
+
+class RoboAlarmsOptionsFlow(OptionsFlow):
+    """What the panel may see of this Home Assistant (HAI-009).
+
+    One list, empty by default: the panel is told about these entities and
+    nothing else, and a watch for anything outside it is ignored.
+    """
+
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Pick the entities the panel may use as zones."""
+        if user_input is not None:
+            return self.async_create_entry(data=user_input)
+        schema = vol.Schema(
+            {
+                vol.Optional(
+                    CONF_SHARE_ENTITIES,
+                    default=list(self.config_entry.options.get(CONF_SHARE_ENTITIES, [])),
+                ): selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain=["binary_sensor"], multiple=True)
+                )
+            }
+        )
+        return self.async_show_form(step_id="init", data_schema=schema)

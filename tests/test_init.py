@@ -9,7 +9,13 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
-from homeassistant.const import CONF_HOST, CONF_PORT, STATE_OFF, STATE_ON
+from homeassistant.const import (
+    CONF_HOST,
+    CONF_PORT,
+    STATE_OFF,
+    STATE_ON,
+    STATE_UNAVAILABLE,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -19,6 +25,7 @@ from custom_components.roboalarms.const import (
     CONF_CLIENT_CERT,
     CONF_CLIENT_KEY,
     CONF_PANEL_FP,
+    CONF_SHARE_ENTITIES,
     DOMAIN,
 )
 
@@ -70,11 +77,16 @@ SNAPSHOT = {
 
 
 class StatePanel:
-    """A fake paired panel: hello, snapshot, then commands answered with 'ok'."""
+    """A fake paired panel: hello, snapshot, then commands answered with 'ok'.
+
+    Everything the integration sends lands in `received` (pings excepted), so a
+    test can look at the catalog and the state messages it is supposed to get.
+    """
 
     def __init__(self) -> None:
         self.server: asyncio.Server | None = None
         self.commands: list[dict[str, Any]] = []
+        self.received: list[dict[str, Any]] = []
         self.command_result = "ok"
         self._push: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._writer: asyncio.StreamWriter | None = None
@@ -101,6 +113,20 @@ class StatePanel:
         """Queue a message for the connected client (a delta, an event)."""
         self._push.put_nowait(msg)
 
+    def got(self, kind: str) -> list[dict[str, Any]]:
+        """Every message of this type the integration has sent so far."""
+        return [msg for msg in self.received if msg.get("t") == kind]
+
+    async def wait_for(self, kind: str, count: int = 1) -> dict[str, Any]:
+        """Wait for the count-th message of a type and return it (it travels a
+        real socket, so it takes a moment)."""
+        for _ in range(100):
+            got = self.got(kind)
+            if len(got) >= count:
+                return got[count - 1]
+            await asyncio.sleep(0.02)
+        raise AssertionError(f"the integration never sent {count} {kind} message(s)")
+
     async def _send(self, writer: asyncio.StreamWriter, msg: dict[str, Any]) -> None:
         writer.write(aiopanel.encode_frame(msg))
         await writer.drain()
@@ -123,6 +149,8 @@ class StatePanel:
                     header = read.result()
                     payload = await reader.readexactly(int.from_bytes(header, "big"))
                     msg = json.loads(payload)
+                    if msg.get("t") != "ping":
+                        self.received.append(msg)
                     if msg.get("t") == "command":
                         self.commands.append(msg)
                         await self._send(
@@ -148,7 +176,9 @@ class StatePanel:
             writer.close()
 
 
-async def _setup(hass: HomeAssistant, panel: StatePanel) -> MockConfigEntry:
+async def _setup(
+    hass: HomeAssistant, panel: StatePanel, options: dict[str, Any] | None = None
+) -> MockConfigEntry:
     entry = MockConfigEntry(
         domain=DOMAIN,
         unique_id="0a1b2c",
@@ -162,6 +192,8 @@ async def _setup(hass: HomeAssistant, panel: StatePanel) -> MockConfigEntry:
         },
     )
     entry.add_to_hass(hass)
+    if options is not None:
+        hass.config_entries.async_update_entry(entry, options=options)
     with patch("custom_components.roboalarms.coordinator.client_ssl_context", return_value=None):
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
@@ -296,6 +328,128 @@ async def test_chime_button_and_event(hass: HomeAssistant) -> None:
         else:
             raise AssertionError("the panel's event never reached the event entity")
         assert ev.attributes["partition"] == 1
+
+
+# ---- what the panel may see of Home Assistant (HAI-009) --------------------------------
+
+PORCH = "binary_sensor.porch"
+HALL = "binary_sensor.hall"
+
+PORCH_ATTRS = {"device_class": "door", "friendly_name": "Porch Door"}
+HALL_ATTRS = {"device_class": "motion", "friendly_name": "Hall Motion"}
+
+
+def _house(hass: HomeAssistant) -> None:
+    """Two binary sensors of this Home Assistant; the tests share only one."""
+    hass.states.async_set(PORCH, STATE_OFF, PORCH_ATTRS)
+    hass.states.async_set(HALL, STATE_OFF, HALL_ATTRS)
+
+
+async def test_catalog_holds_only_the_shared_entities(hass: HomeAssistant) -> None:
+    """The panel is offered what the options picked, in the shape protocol.md
+    describes, and nothing else."""
+    async with StatePanel() as panel:
+        _house(hass)
+        await _setup(hass, panel, {CONF_SHARE_ENTITIES: [PORCH]})
+        catalog = await panel.wait_for("catalog")
+        # the panel's parser reads page and more before the entities
+        assert list(catalog) == ["t", "page", "more", "entities"]
+        assert catalog["page"] == 0
+        assert catalog["more"] is False
+        assert catalog["entities"] == [
+            {
+                "id": PORCH,
+                "name": "Porch Door",
+                "area": "",
+                "domain": "binary_sensor",
+                "class": "door",
+                "state": STATE_OFF,
+            }
+        ]
+
+
+async def test_watch_answers_with_a_state_and_keeps_pushing(hass: HomeAssistant) -> None:
+    """A watched entity arrives at once and again whenever it moves."""
+    async with StatePanel() as panel:
+        _house(hass)
+        await _setup(hass, panel, {CONF_SHARE_ENTITIES: [PORCH]})
+        await panel.wait_for("catalog")
+
+        panel.push({"t": "watch", "ids": [PORCH]})
+        assert await panel.wait_for("state") == {
+            "t": "state",
+            "id": PORCH,
+            "state": STATE_OFF,
+            "avail": True,
+        }
+
+        hass.states.async_set(PORCH, STATE_ON, PORCH_ATTRS)
+        assert await panel.wait_for("state", 2) == {
+            "t": "state",
+            "id": PORCH,
+            "state": STATE_ON,
+            "avail": True,
+        }
+
+
+async def test_watch_outside_the_options_is_ignored(hass: HomeAssistant) -> None:
+    """An entity the options don't share is never reported, asked for or not."""
+    async with StatePanel() as panel:
+        _house(hass)
+        await _setup(hass, panel, {CONF_SHARE_ENTITIES: [PORCH]})
+        await panel.wait_for("catalog")
+
+        panel.push({"t": "watch", "ids": [HALL]})
+        # the shared one that follows proves the first watch was handled
+        panel.push({"t": "watch", "ids": [PORCH]})
+        await panel.wait_for("state")
+
+        hass.states.async_set(HALL, STATE_ON, HALL_ATTRS)
+        await hass.async_block_till_done()
+        await asyncio.sleep(0.1)
+        assert [msg["id"] for msg in panel.got("state")] == [PORCH]
+
+
+async def test_unavailable_entity_is_reported_unavailable(hass: HomeAssistant) -> None:
+    """Nothing to say about it: no state text and avail false, so the zone can
+    go to CHECK rather than look closed."""
+    async with StatePanel() as panel:
+        hass.states.async_set(PORCH, STATE_UNAVAILABLE, PORCH_ATTRS)
+        await _setup(hass, panel, {CONF_SHARE_ENTITIES: [PORCH]})
+        catalog = await panel.wait_for("catalog")
+        assert catalog["entities"][0]["state"] == ""
+
+        panel.push({"t": "watch", "ids": [PORCH]})
+        assert await panel.wait_for("state") == {
+            "t": "state",
+            "id": PORCH,
+            "state": "",
+            "avail": False,
+        }
+
+
+async def test_changed_options_resend_the_catalog(hass: HomeAssistant) -> None:
+    """Sharing one entity less: a fresh page 0, and it stops being watched."""
+    async with StatePanel() as panel:
+        _house(hass)
+        entry = await _setup(hass, panel, {CONF_SHARE_ENTITIES: [PORCH, HALL]})
+        first = await panel.wait_for("catalog")
+        assert [e["id"] for e in first["entities"]] == [PORCH, HALL]
+
+        panel.push({"t": "watch", "ids": [PORCH, HALL]})
+        await panel.wait_for("state", 2)
+
+        hass.config_entries.async_update_entry(entry, options={CONF_SHARE_ENTITIES: [PORCH]})
+        await hass.async_block_till_done()
+        second = await panel.wait_for("catalog", 2)
+        assert second["page"] == 0
+        assert [e["id"] for e in second["entities"]] == [PORCH]
+
+        seen = len(panel.got("state"))
+        hass.states.async_set(HALL, STATE_ON, HALL_ATTRS)
+        await hass.async_block_till_done()
+        await asyncio.sleep(0.1)
+        assert all(msg["id"] == PORCH for msg in panel.got("state")[seen:])
 
 
 async def _wait_for_state(hass: HomeAssistant, entity_id: str, want: str) -> None:
