@@ -32,26 +32,30 @@ entities, commands) and **M13** (two-way: HA entities as panel zones, panel devi
 | `.github/workflows/` | `validate.yml` (hassfest + HACS action), `tests.yml` (pytest + ruff) |
 | `hacs.json` | HACS metadata; `homeassistant` is the minimum HA version (2026.3.0, needed for the in-repo brand icon) |
 
-## Where things stand (2026-09-19)
-Scaffolded, nothing released yet:
-- config flow: manual (host/port) and zeroconf steps, unique id from the panel id TXT key,
-  discovery updates a known entry's address (HAI-004). The connection test is a **stub that
-  always raises CannotConnect** — the panel's TLS API and the `aioroboalarms` client don't
-  exist yet, so no entry can be created. Honest by design; tests pin this behaviour.
+## Where things stand (2026-09-20)
+Nothing released yet:
+- **Protocol v1 exists** (spec: `Features/23/protocol.md` in the panel repo): 4-byte
+  big-endian length + JSON frames on TCP 6054, `hello` both ways, numeric-comparison pairing
+  with a commitment. `aiopanel.py` is the client (framing, hello, `pair_code`/`pair_commit`)
+  — the seed of the planned `aioroboalarms` package, no HA imports allowed in it. Its tests
+  run against a fake asyncio panel and share golden pairing vectors verbatim with the panel's
+  `host/tests/test_link.c`: change the derivation and one of the two suites fails.
+- config flow: manual (host/port) and zeroconf steps, unique id from the panel id, discovery
+  updates a known entry's address (HAI-004), connection tested before the entry is created
+  and the flow recovers from failures. It speaks the real protocol — it will connect as soon
+  as the panel firmware's `ha_link` exists (being built in the panel repo now).
 - `__init__.py` forwards to an empty platform list; `strings.json` = `translations/en.json`.
-- brand icon is a generated placeholder (shield + check); replace when the project has real
-  branding, or rerun the script after tweaking it.
+- brand icon is a generated placeholder (shield + check); `docs/panel-home.png` is the real
+  panel's Home screen from the firmware repo's UI preview (regenerate there, shot 01).
 - CI: hassfest + HACS validation, pytest, ruff.
 
 **Next steps (M12 order, from Features/23 tasks):**
-1. Protocol spec and `alarm_proto` codecs + pairing-code derivation in the panel repo
-   (host-tested; golden vectors shared with the Python tests here).
-2. `aioroboalarms` on PyPI (asyncio client, fake panel for tests) — planned as its own
-   repository so this integration can move toward HA core later; decide when it starts.
-3. Wire `_async_validate_connection` to the client; pairing step in the config flow
-   (HAI-003), then reauth and reconfigure (HAI-004).
-4. Platforms: `alarm_control_panel` first, then binary_sensor, sensor, switch, button,
+1. Panel side: `ha_link` (mDNS, TLS server, pairing over `proto_pair`) — in the panel repo.
+2. Pairing step in the config flow (HAI-003: show progress, the code lives on both screens),
+   TLS with certificate pinning in `aiopanel.py`, then reauth and reconfigure.
+3. Platforms: `alarm_control_panel` first, then binary_sensor, sensor, switch, button,
    event, update (HAI-005..008); push coordinator; diagnostics and repairs (HAI-011).
+4. Split `aiopanel.py` out as `aioroboalarms` on PyPI when it stabilizes.
 5. First GitHub release when a panel can actually pair; HACS default-store inclusion later.
 
 **Open items:**

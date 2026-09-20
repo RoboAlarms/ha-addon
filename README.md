@@ -12,6 +12,12 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/RoboAlarms/ha-addon" alt="License"></a>
 </p>
 
+<p align="center">
+  <img src="docs/panel-home.png" width="720" alt="The RoboAlarms Panel's Home screen: Disarmed, ready to arm, with Away, Stay and Night arming">
+</p>
+
+<p align="center"><em><strong>RoboAlarms</strong> is an open-source alarm system — the panel firmware, the touchscreen experience above, and this Home Assistant integration — <strong>coming soon</strong>.</em></p>
+
 A local integration for the **RoboAlarms Panel** — an open-source touchscreen alarm
 panel built on the Elecrow CrowPanel Advanced 7″ (ESP32-P4).
 Home Assistant discovers the panel on your network, you confirm the pairing **on the

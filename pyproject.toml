@@ -1,5 +1,8 @@
 [tool.ruff]
-target-version = "py314"
+# py313 on purpose: with py314, ruff rewrites `except (A, B):` into PEP 758's
+# unparenthesized form, which every pre-3.14 parser refuses. HA runs on 3.14,
+# but the conservative syntax costs nothing and keeps other tooling working.
+target-version = "py313"
 line-length = 100
 
 [tool.ruff.lint]

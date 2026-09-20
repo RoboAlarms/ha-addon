@@ -16,7 +16,8 @@
       }
     },
     "error": {
-      "cannot_connect": "Could not reach the panel. Check that it is powered, on the same network, and that the Home Assistant integration is enabled on the panel (Settings > Integrations > Home Assistant)."
+      "cannot_connect": "Could not reach the panel. Check that it is powered, on the same network, and that the Home Assistant integration is enabled on the panel (Settings > Integrations > Home Assistant).",
+      "unsupported": "The panel speaks a different version of the link protocol. Update this integration and the panel's firmware to their latest versions."
     },
     "abort": {
       "already_configured": "This panel is already configured. Its address was updated.",
