@@ -247,6 +247,57 @@ async def test_zone_added_without_restart(hass: HomeAssistant) -> None:
         await _wait_for_state(hass, "binary_sensor.garage_door", STATE_ON)
 
 
+async def test_chime_button_and_event(hass: HomeAssistant) -> None:
+    """The chime switch toggles, the button restarts the exit delay, the event
+    entity carries what the panel reports."""
+    async with StatePanel() as panel:
+        await _setup(hass, panel)
+
+        chime = hass.states.get("switch.home_chime")
+        assert chime is not None and chime.state == STATE_OFF
+        await hass.services.async_call(
+            "switch", "turn_on", {"entity_id": "switch.home_chime"}, blocking=True
+        )
+        assert panel.commands[-1]["action"] == "chime"
+        # turning it "off" while it is already off sends nothing (the command toggles)
+        await hass.services.async_call(
+            "switch", "turn_off", {"entity_id": "switch.home_chime"}, blocking=True
+        )
+        assert len(panel.commands) == 1
+
+        await hass.services.async_call(
+            "button",
+            "press",
+            {"entity_id": "button.home_restart_exit_delay"},
+            blocking=True,
+        )
+        assert panel.commands[-1] == {
+            "t": "command",
+            "id": panel.commands[-1]["id"],
+            "action": "exit_restart",
+            "partition": 1,
+        }
+
+        panel.push(
+            {
+                "t": "event",
+                "seq": 12,
+                "event_type": "chime_on",
+                "partition": 1,
+                "user": 2,
+                "silent": False,
+            }
+        )
+        for _ in range(50):
+            await asyncio.sleep(0.02)
+            ev = hass.states.get("event.home_event")
+            if ev is not None and ev.attributes.get("event_type") == "chime_on":
+                break
+        else:
+            raise AssertionError("the panel's event never reached the event entity")
+        assert ev.attributes["partition"] == 1
+
+
 async def _wait_for_state(hass: HomeAssistant, entity_id: str, want: str) -> None:
     """The push arrives over a real socket: give it a moment."""
     for _ in range(50):

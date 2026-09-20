@@ -14,7 +14,13 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from .aiopanel import CannotConnect, InvalidMessage, UnsupportedVersion
 from .coordinator import RoboAlarmsConfigEntry, RoboAlarmsCoordinator, WrongPanel
 
-PLATFORMS: list[Platform] = [Platform.ALARM_CONTROL_PANEL, Platform.BINARY_SENSOR]
+PLATFORMS: list[Platform] = [
+    Platform.ALARM_CONTROL_PANEL,
+    Platform.BINARY_SENSOR,
+    Platform.BUTTON,
+    Platform.EVENT,
+    Platform.SWITCH,
+]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: RoboAlarmsConfigEntry) -> bool:

@@ -40,5 +40,22 @@
       "reauth_successful": "The panel is paired again.",
       "wrong_device": "That address now belongs to a different panel."
     }
+  },
+  "entity": {
+    "switch": {
+      "chime": {
+        "name": "Chime{partition}"
+      }
+    },
+    "button": {
+      "exit_restart": {
+        "name": "Restart exit delay{partition}"
+      }
+    },
+    "event": {
+      "panel_event": {
+        "name": "Event"
+      }
+    }
   }
 }
