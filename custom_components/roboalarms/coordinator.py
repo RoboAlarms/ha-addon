@@ -9,8 +9,10 @@ reconnects with backoff while the entities show unavailable.
 
 The other direction is HAI-009: the entities the options allow are sent to
 the panel as a paged catalog, the panel answers with the ones its zones are
-bound to, and their states are pushed as they change. Nothing outside the
-options list ever leaves Home Assistant.
+bound to, and their states are pushed as they change. The catalog also says
+which of them the panel's Devices screen may act on (Features/24), and a
+`call` for one of those is executed here. Nothing outside the options lists
+ever leaves Home Assistant or is acted on.
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ import asyncio
 import hashlib
 import logging
 from collections.abc import Callable
-from typing import Any
+from typing import Any, NamedTuple
 from uuid import uuid4
 
 from homeassistant.config_entries import ConfigEntry
@@ -45,6 +47,7 @@ from .aiopanel import (
 from .const import (
     CONF_CLIENT_CERT,
     CONF_CLIENT_KEY,
+    CONF_CONTROL_ENTITIES,
     CONF_PANEL_FP,
     CONF_SHARE_ENTITIES,
     DOMAIN,
@@ -61,6 +64,82 @@ _COMMAND_TIMEOUT_S = 15.0
 _CATALOG_PAGE = 20  # entities per catalog message; a full catalog can't fit one frame
 
 type RoboAlarmsConfigEntry = ConfigEntry[RoboAlarmsCoordinator]
+
+
+class _Call(NamedTuple):
+    """One row of Features/24's "Actions per domain": what a panel action does."""
+
+    service: str
+    field: str = ""  # the service data key the argument fills ("" = no argument)
+    source: str = ""  # where it comes from: "value", "hundredths" or "mode"
+    required: bool = True  # False: the argument may be left out
+
+
+# What the panel may ask for, per domain. Nothing outside this table is ever
+# executed and nothing in it is guessed at: alarm_control_panel and siren are
+# absent on purpose (Features/24 - no alarm loops through the Devices screen).
+_CALLS: dict[str, dict[str, _Call]] = {
+    "light": {
+        "turn_on": _Call("turn_on", "brightness_pct", "value", required=False),
+        "turn_off": _Call("turn_off"),
+        "toggle": _Call("toggle"),
+    },
+    "switch": {
+        "turn_on": _Call("turn_on"),
+        "turn_off": _Call("turn_off"),
+        "toggle": _Call("toggle"),
+    },
+    "input_boolean": {
+        "turn_on": _Call("turn_on"),
+        "turn_off": _Call("turn_off"),
+        "toggle": _Call("toggle"),
+    },
+    "fan": {
+        "turn_on": _Call("turn_on"),
+        "turn_off": _Call("turn_off"),
+        "set_percentage": _Call("set_percentage", "percentage", "value"),
+    },
+    "climate": {
+        "set_hvac_mode": _Call("set_hvac_mode", "hvac_mode", "mode"),
+        "set_temperature": _Call("set_temperature", "temperature", "hundredths"),
+        "set_preset_mode": _Call("set_preset_mode", "preset_mode", "mode"),
+    },
+    "cover": {
+        "open": _Call("open_cover"),
+        "close": _Call("close_cover"),
+        "stop": _Call("stop_cover"),
+        "set_position": _Call("set_cover_position", "position", "value"),
+    },
+    "lock": {
+        "lock": _Call("lock"),
+        "unlock": _Call("unlock"),
+    },
+    "valve": {
+        "open": _Call("open_valve"),
+        "close": _Call("close_valve"),
+    },
+    "scene": {"turn_on": _Call("turn_on")},
+    "script": {"turn_on": _Call("turn_on")},
+}
+
+
+def _call_data(wanted: _Call, msg: dict[str, Any]) -> dict[str, Any] | None:
+    """The service data for one call, or None when its argument is missing or
+    of the wrong kind - the panel hears not_allowed rather than a guess."""
+    if not wanted.field:
+        return {}
+    if wanted.source == "mode":
+        mode = msg.get("mode")
+        if isinstance(mode, str) and mode:
+            return {wanted.field: mode}
+        return None if wanted.required else {}
+    value = msg.get("value")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None if wanted.required else {}
+    if wanted.source == "hundredths":
+        # temperatures travel as hundredths of a degree (protocol.md)
+        return {wanted.field: value / 100}
+    return {wanted.field: value}
 
 
 class WrongPanel(LinkError):
@@ -202,14 +281,32 @@ class RoboAlarmsCoordinator(DataUpdateCoordinator[PanelState]):
                     fut.set_result(msg)
             elif t == "watch":
                 await self._async_watch(msg.get("ids"))
+            elif t == "call":
+                await self._async_call(msg)
 
     # ---- what the panel may see (HAI-009) -------------------------------------------
 
+    def _option_list(self, key: str) -> list[str]:
+        """One of the two options lists, in the order chosen."""
+        chosen = self.config_entry.options.get(key) or []
+        return [entity_id for entity_id in chosen if isinstance(entity_id, str)]
+
     @property
     def _allowed(self) -> list[str]:
-        """The entities the options share with the panel, in the order chosen."""
-        shared = self.config_entry.options.get(CONF_SHARE_ENTITIES) or []
-        return [entity_id for entity_id in shared if isinstance(entity_id, str)]
+        """The entities the options share with the panel as zones."""
+        return self._option_list(CONF_SHARE_ENTITIES)
+
+    @property
+    def _controllable(self) -> list[str]:
+        """The entities the options let the panel act on (Features/24)."""
+        return self._option_list(CONF_CONTROL_ENTITIES)
+
+    @property
+    def _catalogued(self) -> list[str]:
+        """Everything the catalog carries: shared first, then control-only ones."""
+        catalogued = list(self._allowed)
+        catalogued += [e for e in self._controllable if e not in catalogued]
+        return catalogued
 
     def _area_name(self, entity_id: str) -> str:
         """Where the entity is, by its own area or the one its device sits in."""
@@ -225,8 +322,14 @@ class RoboAlarmsCoordinator(DataUpdateCoordinator[PanelState]):
         area = ar.async_get(self.hass).async_get_area(area_id)
         return area.name if area is not None else ""
 
-    def _catalog_entity(self, entity_id: str) -> dict[str, Any]:
-        """One catalog row, with the keys protocol.md names for it."""
+    def _catalog_entity(
+        self, entity_id: str, *, zones: bool = True, control: bool = False
+    ) -> dict[str, Any]:
+        """One catalog row, with the keys protocol.md names for it.
+
+        "zones" and "control" come last: the panel's parser only needs page and
+        more before the entities, and older panels ignore what they don't know.
+        """
         state = self.hass.states.get(entity_id)
         known = state is not None and state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN)
         return {
@@ -236,6 +339,8 @@ class RoboAlarmsCoordinator(DataUpdateCoordinator[PanelState]):
             "domain": entity_id.partition(".")[0],
             "class": str(state.attributes.get("device_class") or "") if state is not None else "",
             "state": state.state if known and state is not None else "",
+            "zones": zones,
+            "control": control,
         }
 
     async def _async_send_catalog(self) -> None:
@@ -247,8 +352,12 @@ class RoboAlarmsCoordinator(DataUpdateCoordinator[PanelState]):
         client = self._client
         if client is None:
             return
-        allowed = self._allowed
-        pages = [allowed[i : i + _CATALOG_PAGE] for i in range(0, len(allowed), _CATALOG_PAGE)]
+        catalogued = self._catalogued
+        shared = set(self._allowed)
+        controllable = set(self._controllable)
+        pages = [
+            catalogued[i : i + _CATALOG_PAGE] for i in range(0, len(catalogued), _CATALOG_PAGE)
+        ]
         for page, entity_ids in enumerate(pages or [[]]):
             try:
                 # "page" and "more" before "entities": the panel's parser reads
@@ -258,7 +367,10 @@ class RoboAlarmsCoordinator(DataUpdateCoordinator[PanelState]):
                         "t": "catalog",
                         "page": page,
                         "more": page < len(pages) - 1,
-                        "entities": [self._catalog_entity(e) for e in entity_ids],
+                        "entities": [
+                            self._catalog_entity(e, zones=e in shared, control=e in controllable)
+                            for e in entity_ids
+                        ],
                     }
                 )
             except LinkError as err:
@@ -321,6 +433,59 @@ class RoboAlarmsCoordinator(DataUpdateCoordinator[PanelState]):
         starts without waiting for a reconnect."""
         await self._async_send_catalog()
         await self._async_watch(list(self._panel_watch))
+
+    # ---- what the panel may do: its Devices screen (Features/24) ---------------------
+
+    async def _async_call(self, msg: dict[str, Any]) -> None:
+        """Execute one `call` from the panel, and answer it exactly once.
+
+        The entity must be in the control options and the action must be one
+        Features/24 lists for that entity's domain; anything else is answered
+        not_allowed rather than guessed at. The user code an unlock or an open
+        needs is checked on the panel (HCTL-005) and never crosses this link.
+        """
+        call_id = msg.get("id")
+        if call_id is None or call_id == "":
+            # Nothing to answer to: a result without an id means nothing there.
+            return
+        entity_id = msg.get("entity")
+        action = msg.get("action")
+        if not isinstance(entity_id, str) or not isinstance(action, str):
+            await self._async_call_result(call_id, "not_allowed")
+            return
+        domain = entity_id.partition(".")[0]
+        wanted = _CALLS.get(domain, {}).get(action)
+        if entity_id not in self._controllable or wanted is None:
+            await self._async_call_result(call_id, "not_allowed")
+            return
+        data = _call_data(wanted, msg)
+        if data is None:
+            await self._async_call_result(call_id, "not_allowed")
+            return
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state == STATE_UNAVAILABLE:
+            await self._async_call_result(call_id, "unavailable")
+            return
+        try:
+            await self.hass.services.async_call(
+                domain, wanted.service, {"entity_id": entity_id, **data}, blocking=True
+            )
+        except Exception as err:
+            # Whatever went wrong in Home Assistant, the panel hears one word.
+            _LOGGER.debug("%s: %s %s failed: %s", self.name, entity_id, action, err)
+            await self._async_call_result(call_id, "failed")
+            return
+        await self._async_call_result(call_id, "")
+
+    async def _async_call_result(self, call_id: Any, error: str) -> None:
+        """The one answer a call gets; the id comes back as it was sent."""
+        client = self._client
+        if client is None:
+            return
+        try:
+            await client.send({"t": "call_result", "id": call_id, "ok": not error, "error": error})
+        except LinkError as err:
+            _LOGGER.debug("%s: the call result could not be sent: %s", self.name, err)
 
     # ---- commands (HAI-007) ---------------------------------------------------------
 

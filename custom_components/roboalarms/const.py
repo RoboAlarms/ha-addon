@@ -20,6 +20,7 @@ CONF_CLIENT_CERT = "client_cert"  # this entry's certificate (PEM); the panel pi
 
 # Config entry options.
 CONF_SHARE_ENTITIES = "share_entities"  # the entities the panel may use as zones (HAI-009)
+CONF_CONTROL_ENTITIES = "control_entities"  # the entities the panel may act on (Features/24)
 
 ZC_PROP_ID = "id"  # panel id (stable, lowercase hex)
 ZC_PROP_NAME = "name"  # the panel's friendly name

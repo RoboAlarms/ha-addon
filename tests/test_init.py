@@ -18,12 +18,13 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import MockConfigEntry, async_mock_service
 
 from custom_components.roboalarms import aiopanel
 from custom_components.roboalarms.const import (
     CONF_CLIENT_CERT,
     CONF_CLIENT_KEY,
+    CONF_CONTROL_ENTITIES,
     CONF_PANEL_FP,
     CONF_SHARE_ENTITIES,
     DOMAIN,
@@ -364,6 +365,8 @@ async def test_catalog_holds_only_the_shared_entities(hass: HomeAssistant) -> No
                 "domain": "binary_sensor",
                 "class": "door",
                 "state": STATE_OFF,
+                "zones": True,
+                "control": False,
             }
         ]
 
@@ -450,6 +453,113 @@ async def test_changed_options_resend_the_catalog(hass: HomeAssistant) -> None:
         await hass.async_block_till_done()
         await asyncio.sleep(0.1)
         assert all(msg["id"] == PORCH for msg in panel.got("state")[seen:])
+
+
+# ---- what the panel may do: its Devices screen (Features/24) ---------------------------
+
+LIGHT = "light.porch"
+LAMP = "light.lamp"
+LOCK = "lock.front_door"
+THERMOSTAT = "climate.hall"
+
+
+async def _call(
+    hass: HomeAssistant, panel: StatePanel, count: int = 1, **fields: Any
+) -> dict[str, Any]:
+    """Ask the panel's way for something and wait for the one answer to it."""
+    panel.push({"t": "call", **fields})
+    result = await panel.wait_for("call_result", count)
+    await hass.async_block_till_done()
+    return result
+
+
+async def test_call_controls_an_allowed_light(hass: HomeAssistant) -> None:
+    """A light the options allow is turned on with the brightness asked for."""
+    async with StatePanel() as panel:
+        hass.states.async_set(LIGHT, STATE_OFF)
+        calls = async_mock_service(hass, "light", "turn_on")
+        await _setup(hass, panel, {CONF_CONTROL_ENTITIES: [LIGHT]})
+        await panel.wait_for("catalog")
+
+        result = await _call(hass, panel, id="c1", entity=LIGHT, action="turn_on", value=60)
+        assert result == {"t": "call_result", "id": "c1", "ok": True, "error": ""}
+        assert len(calls) == 1
+        assert calls[0].data["entity_id"] == LIGHT
+        assert calls[0].data["brightness_pct"] == 60
+
+
+async def test_call_outside_the_options_is_refused(hass: HomeAssistant) -> None:
+    """An entity nobody allowed is never touched, whatever the panel asks."""
+    async with StatePanel() as panel:
+        hass.states.async_set(LIGHT, STATE_OFF)
+        hass.states.async_set(LAMP, STATE_OFF)
+        calls = async_mock_service(hass, "light", "turn_on")
+        await _setup(hass, panel, {CONF_CONTROL_ENTITIES: [LIGHT]})
+        await panel.wait_for("catalog")
+
+        result = await _call(hass, panel, id="c2", entity=LAMP, action="turn_on")
+        assert result == {"t": "call_result", "id": "c2", "ok": False, "error": "not_allowed"}
+        assert calls == []
+
+
+async def test_call_with_an_action_the_domain_lacks_is_refused(hass: HomeAssistant) -> None:
+    """A lock has no toggle in Features/24's table: refused, never guessed."""
+    async with StatePanel() as panel:
+        hass.states.async_set(LOCK, "locked")
+        calls = async_mock_service(hass, "lock", "unlock")
+        await _setup(hass, panel, {CONF_CONTROL_ENTITIES: [LOCK]})
+        await panel.wait_for("catalog")
+
+        result = await _call(hass, panel, id="c3", entity=LOCK, action="toggle")
+        assert result == {"t": "call_result", "id": "c3", "ok": False, "error": "not_allowed"}
+        assert calls == []
+
+
+async def test_call_on_an_unavailable_entity_says_so(hass: HomeAssistant) -> None:
+    """Nothing to act on: the panel is told rather than left waiting."""
+    async with StatePanel() as panel:
+        hass.states.async_set(LIGHT, STATE_UNAVAILABLE)
+        calls = async_mock_service(hass, "light", "turn_on")
+        await _setup(hass, panel, {CONF_CONTROL_ENTITIES: [LIGHT]})
+        await panel.wait_for("catalog")
+
+        result = await _call(hass, panel, id="c4", entity=LIGHT, action="turn_on")
+        assert result == {"t": "call_result", "id": "c4", "ok": False, "error": "unavailable"}
+        assert calls == []
+
+
+async def test_call_sets_a_temperature_from_hundredths(hass: HomeAssistant) -> None:
+    """The panel counts in hundredths of a degree; Home Assistant in degrees."""
+    async with StatePanel() as panel:
+        hass.states.async_set(THERMOSTAT, "heat")
+        calls = async_mock_service(hass, "climate", "set_temperature")
+        await _setup(hass, panel, {CONF_CONTROL_ENTITIES: [THERMOSTAT]})
+        await panel.wait_for("catalog")
+
+        result = await _call(
+            hass, panel, id="c5", entity=THERMOSTAT, action="set_temperature", value=2150
+        )
+        assert result["ok"] is True
+        assert len(calls) == 1
+        assert calls[0].data["temperature"] == 21.5
+
+
+async def test_catalog_marks_zones_and_control(hass: HomeAssistant) -> None:
+    """One entity shared, one controllable, one both: each row says which."""
+    async with StatePanel() as panel:
+        _house(hass)
+        hass.states.async_set(LIGHT, STATE_OFF)
+        await _setup(
+            hass,
+            panel,
+            {CONF_SHARE_ENTITIES: [PORCH, HALL], CONF_CONTROL_ENTITIES: [HALL, LIGHT]},
+        )
+        catalog = await panel.wait_for("catalog")
+        assert [(e["id"], e["zones"], e["control"]) for e in catalog["entities"]] == [
+            (PORCH, True, False),
+            (HALL, True, True),
+            (LIGHT, False, True),
+        ]
 
 
 async def _wait_for_state(hass: HomeAssistant, entity_id: str, want: str) -> None:

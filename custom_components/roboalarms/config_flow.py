@@ -10,7 +10,8 @@ A discovered panel whose entry already exists gets its host updated instead
 of a duplicate. Reauth and reconfigure land next.
 
 The options flow is the other half of HAI-009: Home Assistant decides which
-entities the panel may see, and nothing outside that list is ever sent.
+entities the panel may see and which it may control, and nothing outside
+those lists is ever sent or acted on.
 """
 
 from __future__ import annotations
@@ -39,6 +40,7 @@ from .aiopanel import (
 from .const import (
     CONF_CLIENT_CERT,
     CONF_CLIENT_KEY,
+    CONF_CONTROL_ENTITIES,
     CONF_PANEL_FP,
     CONF_SHARE_ENTITIES,
     DEFAULT_PORT,
@@ -288,25 +290,49 @@ class RoboAlarmsConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_abort(reason=self._fail)
 
 
-class RoboAlarmsOptionsFlow(OptionsFlow):
-    """What the panel may see of this Home Assistant (HAI-009).
+# The domains the panel's Devices screen can act on (Features/24, "Actions per
+# domain"). alarm_control_panel and siren are deliberately absent: no alarm loops.
+CONTROL_DOMAINS = [
+    "light",
+    "switch",
+    "input_boolean",
+    "fan",
+    "climate",
+    "cover",
+    "lock",
+    "valve",
+    "scene",
+    "script",
+]
 
-    One list, empty by default: the panel is told about these entities and
-    nothing else, and a watch for anything outside it is ignored.
+
+class RoboAlarmsOptionsFlow(OptionsFlow):
+    """What the panel may see and do in this Home Assistant (HAI-009).
+
+    Two lists, both empty by default: the entities the panel may use as zones,
+    and the ones it may control from its Devices screen. An entity can be in
+    both. A watch or a call for anything outside them is refused.
     """
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Pick the entities the panel may use as zones."""
+        """Pick the entities the panel may use as zones and the ones it may control."""
         if user_input is not None:
             return self.async_create_entry(data=user_input)
+        options = self.config_entry.options
         schema = vol.Schema(
             {
                 vol.Optional(
                     CONF_SHARE_ENTITIES,
-                    default=list(self.config_entry.options.get(CONF_SHARE_ENTITIES, [])),
+                    default=list(options.get(CONF_SHARE_ENTITIES, [])),
                 ): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain=["binary_sensor"], multiple=True)
-                )
+                ),
+                vol.Optional(
+                    CONF_CONTROL_ENTITIES,
+                    default=list(options.get(CONF_CONTROL_ENTITIES, [])),
+                ): selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain=CONTROL_DOMAINS, multiple=True)
+                ),
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema)

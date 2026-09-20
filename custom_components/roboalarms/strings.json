@@ -44,13 +44,15 @@
   "options": {
     "step": {
       "init": {
-        "title": "Entities the panel may use as zones",
-        "description": "Choose the binary sensors your panel is allowed to use. Only these are ever sent to the panel: it is told their name, area, device class and state, and nothing else in Home Assistant is offered to it or answered for.\n\nOn the panel, a chosen entity can then be bound to a zone under Settings > Zones.",
+        "title": "What the panel may see and do",
+        "description": "Choose what your panel is allowed to use. Only these entities are ever sent to the panel: it is told their name, area, device class and state, and nothing else in Home Assistant is offered to it, answered for or acted on.\n\nOn the panel, a shared entity can be bound to a zone under Settings > Zones, and a controllable one appears on its Devices screen.",
         "data": {
-          "share_entities": "Shared entities"
+          "share_entities": "Entities the panel may use as zones",
+          "control_entities": "Entities the panel may control"
         },
         "data_description": {
-          "share_entities": "Leave this empty and the panel sees nothing from Home Assistant."
+          "share_entities": "Leave this empty and the panel sees nothing from Home Assistant.",
+          "control_entities": "Lights, switches, covers, locks and the rest the panel may turn on, open or close from its Devices screen. Unlocking a lock and opening a cover or valve still ask for a user code on the panel itself."
         }
       }
     }

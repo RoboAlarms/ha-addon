@@ -130,7 +130,7 @@ but the MQTT path remains supported by the panel firmware.
 | Panel local API | TLS server, pairing, state, events, commands in the panel firmware | Discovery, hello and pairing built; state, events and commands in progress |
 | Protocol client | `aioroboalarms` (inside this integration until it moves to PyPI) | Framing, hello and pairing done, tested against a fake panel |
 | This integration | Config flow, entities, diagnostics, repairs | Discovery, connection test and on-panel pairing done; entities next |
-| Two-way | HA entities as panel zones, panel device control | Planned |
+| Two-way | HA entities as panel zones, panel device control | Both directions built here: shared entities become panel zones, and the panel's device actions run against your allow-list; the panel's Devices screen itself is being built in the firmware |
 
 ## Contributing
 

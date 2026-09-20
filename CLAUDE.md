@@ -55,13 +55,18 @@ Nothing released yet:
   device under the panel, new zones appear without a restart), `diagnostics.py` (keys
   redacted), and the reauth flow (pair again after a factory reset). `tests/test_init.py`
   drives all of it over a real socket. `strings.json` = `translations/en.json`.
-- **the sharing half of M13 works against the fake panel** (HAI-009): an options flow picks the
-  binary sensors the panel may use as zones (`entry.options["share_entities"]`, empty by
-  default), the coordinator sends them as a paged `catalog` after every connect and whenever
-  the options change, answers the panel's `watch` with a `state` each and pushes changes from
-  then on. A watch for anything outside the options is ignored without a word, and the
-  subscription goes away with the link. The panel's side of it and the Devices screen (`call`,
-  `call_result`) are still to come.
+- **both halves of M13 work against the fake panel** (HAI-009): the options flow picks the
+  binary sensors the panel may use as zones (`entry.options["share_entities"]`) and the
+  entities it may control (`entry.options["control_entities"]`), both empty by default. The
+  coordinator sends their union as a paged `catalog` after every connect and whenever the
+  options change - each entry carrying `zones` and `control` - answers the panel's `watch`
+  with a `state` each and pushes changes from then on. A watch for anything outside
+  `share_entities` is ignored without a word, and the subscription goes away with the link.
+  A `call` is executed only for an entity in `control_entities` and only with an action
+  Features/24's table lists for its domain; anything else is answered `not_allowed`, a
+  missing or unavailable entity `unavailable`, a service that raises `failed`, and every
+  call with an id gets exactly one `call_result`. The panel's own side of both is still to
+  come.
 - brand icon is a generated placeholder (shield + check); `docs/panel-home.png` is the real
   panel's Home screen from the firmware repo's UI preview (regenerate there, shot 01).
 - CI: hassfest + HACS validation, pytest, ruff.
