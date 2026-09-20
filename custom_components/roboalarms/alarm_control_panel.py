@@ -18,7 +18,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .coordinator import RoboAlarmsConfigEntry, RoboAlarmsCoordinator
-from .entity import RoboAlarmsEntity
+from .entity import RoboAlarmsPartitionEntity, async_add_partition_entities
 
 _HA_STATE = {
     "disarmed": AlarmControlPanelState.DISARMED,
@@ -36,13 +36,12 @@ async def async_setup_entry(
     entry: RoboAlarmsConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """One entity per partition in the first snapshot."""
+    """One entity per partition, including ones the panel adds later (HA09)."""
     coordinator = entry.runtime_data
-    assert coordinator.data is not None and coordinator.data.partitions is not None
-    async_add_entities(RoboAlarmsPartition(coordinator, p) for p in coordinator.data.partitions)
+    async_add_partition_entities(coordinator, entry, async_add_entities, RoboAlarmsPartition)
 
 
-class RoboAlarmsPartition(RoboAlarmsEntity, AlarmControlPanelEntity):
+class RoboAlarmsPartition(RoboAlarmsPartitionEntity, AlarmControlPanelEntity):
     """A partition as Home Assistant's alarm panel."""
 
     _attr_name = None  # the device (partition 1: the panel) carries the name
@@ -55,20 +54,10 @@ class RoboAlarmsPartition(RoboAlarmsEntity, AlarmControlPanelEntity):
     )
 
     def __init__(self, coordinator: RoboAlarmsCoordinator, partition: int) -> None:
-        super().__init__(coordinator)
-        self._partition = partition
+        super().__init__(coordinator, partition)
         self._attr_unique_id = f"{self.panel_id}_p{partition}"
         if partition != 1:
             self._attr_name = f"Partition {partition}"
-
-    @property
-    def available(self) -> bool:
-        return (
-            super().available
-            and self.coordinator.data is not None
-            and self.coordinator.data.partitions is not None
-            and self._partition in self.coordinator.data.partitions
-        )
 
     @property
     @callback

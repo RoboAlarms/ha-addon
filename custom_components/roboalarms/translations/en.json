@@ -21,6 +21,14 @@
       "reauth_confirm": {
         "title": "Pair with the panel again",
         "description": "{name} no longer answers with the certificate it was paired with - usually after a factory reset. Open pairing on the panel (Settings > Integrations > Home Assistant > Pair), then continue here."
+      },
+      "reconfigure": {
+        "title": "Change panel address",
+        "description": "Enter the new address of the same paired panel. Your pairing and entities are retained.",
+        "data": {
+          "host": "Host",
+          "port": "Port"
+        }
       }
     },
     "progress": {
@@ -29,7 +37,8 @@
     "error": {
       "cannot_connect": "Could not reach the panel. Check that it is powered, on the same network, and that the Home Assistant integration is enabled on the panel (Settings > Integrations > Home Assistant).",
       "unsupported": "The panel speaks a different version of the link protocol. Update this integration and the panel's firmware to their latest versions.",
-      "not_pairing": "The panel isn't pairing right now. Open pairing on its screen first, then try again."
+      "not_pairing": "The panel isn't pairing right now. Open pairing on its screen first, then try again.",
+      "pair_again": "The certificate has changed. Reauthenticate the integration and confirm a new pairing on the panel."
     },
     "abort": {
       "already_configured": "This panel is already configured. Its address was updated.",
@@ -38,7 +47,8 @@
       "pair_timeout": "Pairing timed out on the panel. Open it again and retry.",
       "pair_mismatch": "The pairing could not be trusted and was stopped. Try again on a network you trust.",
       "reauth_successful": "The panel is paired again.",
-      "wrong_device": "That address now belongs to a different panel."
+      "wrong_device": "That address now belongs to a different panel.",
+      "reconfigure_successful": "The panel address has been updated."
     }
   },
   "options": {
@@ -72,6 +82,45 @@
       "panel_event": {
         "name": "Event"
       }
+    },
+    "binary_sensor": {
+      "tamper": {
+        "name": "Tamper"
+      },
+      "low_battery": {
+        "name": "Low battery"
+      },
+      "supervision": {
+        "name": "Supervision"
+      },
+      "trouble": {
+        "name": "Trouble"
+      },
+      "ac_power": {
+        "name": "AC power"
+      },
+      "installer_mode": {
+        "name": "Installer mode"
+      }
+    },
+    "sensor": {
+      "uptime_s": {
+        "name": "Uptime"
+      },
+      "rssi": {
+        "name": "Wi-Fi signal"
+      }
+    },
+    "update": {
+      "firmware": {
+        "name": "Firmware"
+      }
+    }
+  },
+  "issues": {
+    "unsupported_protocol": {
+      "title": "Panel protocol is incompatible",
+      "description": "{name} uses a protocol version this integration cannot understand. Update the panel firmware and the RoboAlarms integration to compatible versions. The connection will recover automatically once they agree."
     }
   }
 }

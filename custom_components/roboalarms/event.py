@@ -4,6 +4,13 @@ Every reportable event the panel pushes lands here with its fields as
 attributes. Silent events (duress, silent panic) arrive marked silent and
 never change any alarm state (HAI-008): whether an automation reacts to
 them is the user's decision.
+
+Every panel's coordinator fires its events on the same `roboalarms_event`
+bus event, so "any panel" automations keep working. Each event carries the
+entry_id of the panel it came from, stamped locally by that panel's own
+coordinator; this entity ignores anything not stamped with its own
+coordinator's entry_id, so one panel's alarm cannot trigger another
+panel's event entity or its automations (HA04).
 """
 
 from __future__ import annotations
@@ -59,6 +66,8 @@ class RoboAlarmsEvent(RoboAlarmsEntity, EventEntity):
     @callback
     def _handle_panel_event(self, event: Any) -> None:
         msg: dict[str, Any] = dict(event.data)
+        if msg.pop("entry_id", None) != self.coordinator.config_entry.entry_id:
+            return  # another panel's event on the shared bus event (HA04)
         event_type = str(msg.pop("event_type", ""))
         if event_type not in EVENT_TYPES:
             return  # a newer panel: an unknown event rides along, never crashes

@@ -9,6 +9,7 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
 from homeassistant.const import (
     CONF_HOST,
     CONF_PORT,
@@ -29,6 +30,7 @@ from custom_components.roboalarms.const import (
     CONF_SHARE_ENTITIES,
     DOMAIN,
 )
+from custom_components.roboalarms.coordinator import WrongPanel
 
 pytestmark = pytest.mark.usefixtures("socket_enabled")
 
@@ -82,12 +84,19 @@ class StatePanel:
 
     Everything the integration sends lands in `received` (pings excepted), so a
     test can look at the catalog and the state messages it is supposed to get.
+
+    The order matters and is the firmware's: every fresh paired connection
+    sends the watch list (the entities its zones are bound to) *before* its
+    first snapshot - `ha_link.c` sets req_watch on connect and `push_state()`
+    answers it ahead of the snapshot. `watch` is what that list holds; set it
+    before setup to model a panel that already has Home Assistant zones.
     """
 
     def __init__(self) -> None:
         self.server: asyncio.Server | None = None
         self.commands: list[dict[str, Any]] = []
         self.received: list[dict[str, Any]] = []
+        self.watch: list[str] = []
         self.command_result = "ok"
         self._push: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._writer: asyncio.StreamWriter | None = None
@@ -138,6 +147,8 @@ class StatePanel:
             header = await reader.readexactly(4)
             await reader.readexactly(int.from_bytes(header, "big"))  # the client's hello
             await self._send(writer, PANEL_HELLO)
+            # the firmware's order: the watch list, then the snapshot
+            await self._send(writer, {"t": "watch", "ids": list(self.watch)})
             await self._send(writer, SNAPSHOT)
             read = asyncio.ensure_future(reader.readexactly(4))
             pushed = asyncio.ensure_future(self._push.get())
@@ -199,6 +210,28 @@ async def _setup(
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
     return entry
+
+
+async def test_startup_wrong_certificate_requests_reauth(hass: HomeAssistant) -> None:
+    """A pinned-certificate mismatch found while connecting at startup gets the
+    same reauth recovery as one found on a running connection (HA06):
+    coordinator.py's reconnect loop calls config_entry.async_start_reauth
+    directly (it can't raise past its own background task), and setup must
+    reach the same place rather than retrying forever with no way out."""
+    entry = MockConfigEntry(
+        domain=DOMAIN, unique_id="deadbeef", data={CONF_HOST: "test", CONF_PORT: 6054}
+    )
+    entry.add_to_hass(hass)
+    with patch(
+        "custom_components.roboalarms.coordinator.RoboAlarmsCoordinator.async_start",
+        side_effect=WrongPanel("changed certificate"),
+    ):
+        assert not await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.SETUP_ERROR
+    flows = hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+    assert len(flows) == 1
+    assert flows[0]["context"]["source"] == SOURCE_REAUTH
 
 
 async def test_snapshot_becomes_entities(hass: HomeAssistant) -> None:

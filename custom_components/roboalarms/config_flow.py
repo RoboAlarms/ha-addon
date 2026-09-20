@@ -7,7 +7,7 @@ is created when the person at the panel taps Allow. The entry keeps this
 client's key and certificate and the panel's pinned fingerprint.
 
 A discovered panel whose entry already exists gets its host updated instead
-of a duplicate. Reauth and reconfigure land next.
+of a duplicate. Reauthentication and reconfiguration preserve the existing entry.
 
 The options flow is the other half of HAI-009: Home Assistant decides which
 entities the panel may see and which it may control, and nothing outside
@@ -17,6 +17,7 @@ those lists is ever sent or acted on.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from typing import Any
 
 import voluptuous as vol
@@ -97,21 +98,43 @@ class RoboAlarmsConfigFlow(ConfigFlow, domain=DOMAIN):
             )
 
     async def _async_connect(self) -> PanelClient:
-        """Open a connection and exchange hellos (the test-before-configure)."""
+        """Open a connection and exchange hellos (the test-before-configure).
+
+        Ownership of the client stays local to this call: on any failure -
+        cancellation included - the socket we just opened is closed rather
+        than handed back half-open. `except Exception` alone would miss a
+        cancellation (`asyncio.CancelledError` is a `BaseException`, not an
+        `Exception`, so it would skip the close and propagate a leaked
+        client); the `finally` here runs either way.
+        """
         await self._async_ensure_identity()
         assert self._host is not None
         client = PanelClient(self._host, self._port, ssl=self._ssl)
+        connected = False
         try:
             await client.connect()
-        except Exception:
-            await client.close()
-            raise
+            connected = True
+        finally:
+            if not connected:
+                await client.close()
         return client
 
     async def _async_close_client(self) -> None:
         if self._client is not None:
             await self._client.close()
             self._client = None
+
+    @callback
+    def async_remove(self) -> None:
+        """The flow is gone: aborted, replaced, or cancelled mid-step.
+
+        HA cancels our progress task (`pair_wait`) by itself, but nothing
+        else knows about a `PanelClient` a step is still holding in
+        `self._client`. Close it here so a cancelled pairing attempt doesn't
+        keep sitting on the panel's one connection slot (HA07).
+        """
+        if self._client is not None:
+            self.hass.async_create_task(self._async_close_client())
 
     async def _async_validate(self, errors: dict[str, str]) -> bool:
         """Test the connection; on success the flow's unique id and name are set."""
@@ -179,6 +202,72 @@ class RoboAlarmsConfigFlow(ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Validate a new address using the existing identity and pinned certificate.
+
+        The panel has one connection slot. Release the running coordinator while
+        probing, and restore the original entry if validation fails or is cancelled.
+        """
+        entry = self._get_reconfigure_entry()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            self._host = user_input[CONF_HOST]
+            self._port = user_input[CONF_PORT]
+            self._key_pem = entry.data[CONF_CLIENT_KEY]
+            self._cert_pem = entry.data[CONF_CLIENT_CERT]
+            self._ssl = await self.hass.async_add_executor_job(
+                client_ssl_context, self._key_pem, self._cert_pem
+            )
+            was_loaded = entry.state is config_entries.ConfigEntryState.LOADED
+            if was_loaded and not await self.hass.config_entries.async_unload(entry.entry_id):
+                return self.async_abort(reason="cannot_connect")
+            validated = False
+            try:
+                try:
+                    client = await self._async_connect()
+                except (CannotConnect, InvalidMessage, TimeoutError):
+                    errors["base"] = "cannot_connect"
+                except UnsupportedVersion:
+                    errors["base"] = "unsupported"
+                else:
+                    pin_matches = False
+                    try:
+                        info = client.info
+                        der = client.panel_cert_der
+                        if info is None or info.panel_id != entry.unique_id:
+                            return self.async_abort(reason="wrong_device")
+                        if (
+                            der is None
+                            or hashlib.sha256(der).hexdigest() != entry.data[CONF_PANEL_FP]
+                        ):
+                            errors["base"] = "pair_again"
+                        else:
+                            pin_matches = True
+                    finally:
+                        await client.close()
+                    validated = pin_matches
+                if validated:
+                    return self.async_update_reload_and_abort(
+                        entry, data_updates={CONF_HOST: self._host, CONF_PORT: self._port}
+                    )
+            finally:
+                if was_loaded and not validated:
+                    await self.hass.config_entries.async_reload(entry.entry_id)
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_HOST, default=entry.data[CONF_HOST]): str,
+                    vol.Required(CONF_PORT, default=entry.data[CONF_PORT]): vol.All(
+                        vol.Coerce(int), vol.Range(min=1, max=65535)
+                    ),
+                }
+            ),
+            errors=errors,
+        )
+
     # ---- reauth: the panel was factory-reset or replaced (HAI-004) ----------------
 
     async def async_step_reauth(self, entry_data: dict[str, Any]) -> ConfigFlowResult:
@@ -222,6 +311,14 @@ class RoboAlarmsConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             try:
                 self._client = await self._async_connect()
+                info = self._client.info
+                assert info is not None
+                if info.panel_id != self.unique_id:
+                    # Something else now answers at this address than the
+                    # panel validation just checked: never let a pairing
+                    # session attach its result to a different id (HA14).
+                    await self._async_close_client()
+                    return self.async_abort(reason="wrong_device")
                 assert self._cert_pem is not None
                 cert_der = await self.hass.async_add_executor_job(cert_der_from_pem, self._cert_pem)
                 self._code = await self._client.pair_begin(cert_der)

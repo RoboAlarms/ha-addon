@@ -19,3 +19,25 @@ select = [
 testpaths = ["tests"]
 pythonpath = ["."]
 asyncio_mode = "auto"
+
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aioroboalarms"
+version = "0.1.0"
+description = "Asyncio client for the RoboAlarms local mutual-TLS panel protocol"
+readme = "protocol/README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+dependencies = ["cryptography>=44"]
+
+[project.urls]
+Source = "https://github.com/RoboAlarms/ha-addon"
+Issues = "https://github.com/RoboAlarms/ha-addon/issues"
+
+[tool.setuptools]
+py-modules = ["aioroboalarms"]
+package-dir = {"" = "protocol"}

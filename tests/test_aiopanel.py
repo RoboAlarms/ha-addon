@@ -267,3 +267,363 @@ def test_client_identity_roundtrip() -> None:
     assert der == aiopanel.cert_der_from_pem(cert_pem)
     ctx = aiopanel.client_ssl_context(key_pem, cert_pem)
     assert ctx.check_hostname is False
+
+
+# ---- framing across timeouts (HA10) ------------------------------------------------
+
+
+def _reading(stream: asyncio.StreamReader) -> aiopanel.PanelClient:
+    """A client that receives from this stream, without a socket under it."""
+    client = aiopanel.PanelClient("unused")
+    client._reader = stream
+    return client
+
+
+# What the firmware actually writes: proto_partition_status and proto_zone_state
+# (alarm_proto/src/messages.c). Fuller than the client reads, with the nulls
+# pj_kstr writes where the panel has no value, so the tests below prove the
+# checks do not refuse a real panel.
+PANEL_PARTITION = {
+    "partition": 1,
+    "name": "Home",
+    "state": "disarmed",
+    "ha_state": "disarmed",
+    "level": None,
+    "no_entry_delay": False,
+    "silent_exit": False,
+    "ready": True,
+    "ready_levels": ["away", "stay"],
+    "delay_remaining_s": 0,
+    "triggered": False,
+    "exit_error": False,
+    "chime": False,
+    "walk_test": False,
+    "installer_mode": False,
+    "armed_by": None,
+    "memory": [],
+    "memory_canceled": False,
+    "faults": 0,
+    "bypassed": 0,  # a count here, a boolean on a zone: both are read as given
+    "alarms": 0,
+    "troubles": 0,
+    "trouble_beeps": False,
+    "sounder": "off",
+    "ts": None,
+}
+
+PANEL_ZONE = {
+    "zone": 1,
+    "name": "Front Door",
+    "type": "entry_exit_1",
+    "device_class": None,  # the panel writes null for "no device class"
+    "partition": 1,
+    "open": False,
+    "bypassed": False,
+    "alarm": False,
+    "trouble": False,
+    "tamper": False,
+    "low_battery": False,
+    "supervision": False,
+    "not_ready": False,
+}
+
+PANEL_SNAPSHOT = {
+    "t": "snapshot",
+    "seq": 7,
+    "partitions": [PANEL_PARTITION],
+    "zones": [PANEL_ZONE],
+    "troubles": {"zones": [], "system": [], "devices": []},
+}
+
+# A full panel's snapshot (128 zones) and a small frame behind it: the two must
+# come out whole however the bytes are chopped up.
+BIG_SNAPSHOT = {
+    **PANEL_SNAPSHOT,
+    "zones": [{**PANEL_ZONE, "zone": z, "name": f"Zone {z}"} for z in range(1, 129)],
+}
+STREAM = aiopanel.encode_frame(BIG_SNAPSHOT) + aiopanel.encode_frame({"t": "pong"})
+FIRST = len(aiopanel.encode_frame(BIG_SNAPSHOT))
+
+
+async def test_timeout_before_a_frame_is_silence() -> None:
+    """Nothing consumed: TimeoutError, and the next frame reads whole."""
+    stream = asyncio.StreamReader()
+    client = _reading(stream)
+    with pytest.raises(TimeoutError):
+        await client.recv(timeout=0.01)
+    stream.feed_data(aiopanel.encode_frame({"t": "pong"}))
+    assert await client.recv(timeout=0.5) == {"t": "pong"}
+
+
+async def test_a_timeout_halfway_through_a_frame_keeps_the_message() -> None:
+    """The header is not lost when the timeout strikes mid-payload (HA10)."""
+    stream = asyncio.StreamReader()
+    client = _reading(stream)
+    frame = aiopanel.encode_frame({"t": "pong"})
+    stream.feed_data(frame[:6])
+    asyncio.get_running_loop().call_later(0.05, stream.feed_data, frame[6:])
+    assert await client.recv(timeout=0.01) == {"t": "pong"}
+
+
+async def test_a_frame_that_never_finishes_is_a_dead_link(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Silence with a frame half consumed is a torn link, not a quiet one."""
+    monkeypatch.setattr(aiopanel, "_FRAME_STALL", 0.05)
+    stream = asyncio.StreamReader()
+    client = _reading(stream)
+    stream.feed_data(aiopanel.encode_frame({"t": "pong"})[:6])
+    with pytest.raises(aiopanel.CannotConnect):
+        await client.recv(timeout=0.01)
+
+
+@pytest.mark.parametrize(
+    "cut",
+    [0, 1, 3, 4, 5, 2000, FIRST - 1, FIRST, FIRST + 1, FIRST + 3, FIRST + 4, FIRST + 8],
+)
+async def test_a_timeout_at_any_cut_keeps_the_boundary(cut: int) -> None:
+    """Fragmentation before, during and after a header, in a big snapshot and
+    in the frame behind it: every message arrives once, at its own boundary."""
+    stream = asyncio.StreamReader()
+    client = _reading(stream)
+    stream.feed_data(STREAM[:cut])
+
+    async def feed_the_rest() -> None:
+        await asyncio.sleep(0.05)
+        stream.feed_data(STREAM[cut:])
+
+    feeder = asyncio.create_task(feed_the_rest())
+    got: list[dict[str, Any]] = []
+    for _ in range(40):
+        if len(got) == 2:
+            break
+        try:
+            got.append(await client.recv(timeout=0.01))
+        except TimeoutError:
+            pass  # nothing had been consumed: harmless silence
+    await feeder
+    assert got == [BIG_SNAPSHOT, {"t": "pong"}]
+    with pytest.raises(TimeoutError):
+        await client.recv(timeout=0.01)  # and nothing was delivered twice
+
+
+# ---- sending against a peer that stops reading (HA11) ------------------------------
+
+
+class BlockedWriter:
+    """A transport that accepts bytes and never finishes flushing them."""
+
+    def __init__(self) -> None:
+        self.queued = 0
+        self.release = asyncio.Event()
+
+    def write(self, data: bytes) -> None:
+        self.queued += len(data)
+
+    async def drain(self) -> None:
+        await self.release.wait()
+
+
+def _writing(writer: object) -> aiopanel.PanelClient:
+    """A client that sends into this writer, without a socket under it."""
+    client = aiopanel.PanelClient("unused")
+    client._writer = writer  # type: ignore[assignment]
+    return client
+
+
+async def test_a_send_gives_up_on_a_peer_that_stops_reading() -> None:
+    """send has a deadline of its own: it cannot hang for ever (HA11)."""
+    writer = BlockedWriter()
+    client = _writing(writer)
+    with pytest.raises(aiopanel.CannotConnect):
+        await client.send({"t": "ping"}, timeout=0.05)
+    writer.release.set()
+
+
+async def test_many_sends_against_a_blocked_peer_stay_bounded() -> None:
+    """200 state messages at once: all finish, the queue and the bytes handed
+    to the stuck transport stay bounded, and nothing is left pending."""
+    writer = BlockedWriter()
+    client = _writing(writer)
+    messages = [
+        {"t": "state", "id": f"binary_sensor.z{i}", "state": "on", "avail": True}
+        for i in range(200)
+    ]
+    results = await asyncio.gather(
+        *[asyncio.create_task(client.send(m, timeout=0.05)) for m in messages],
+        return_exceptions=True,
+    )
+    assert len(results) == 200
+    assert all(isinstance(r, aiopanel.CannotConnect) for r in results)
+    refused = [r for r in results if isinstance(r, aiopanel.SendOverflow)]
+    assert len(refused) == 200 - aiopanel.SEND_QUEUE_MAX  # the rest never queued
+    # Only the one frame that reached the transport before it stalled.
+    assert writer.queued == len(aiopanel.encode_frame(messages[0]))
+    assert client._waiting == 0
+    writer.release.set()
+
+
+async def test_a_link_that_gave_up_sending_stops_receiving_too() -> None:
+    """The listener finds the link dead and reconnects, rather than reading on
+    over a connection it can no longer answer (HA11)."""
+    writer = BlockedWriter()
+    client = _writing(writer)
+    stream = asyncio.StreamReader()
+    client._reader = stream
+    stream.feed_data(aiopanel.encode_frame({"t": "pong"}))
+    with pytest.raises(aiopanel.CannotConnect):
+        await client.send({"t": "ping"}, timeout=0.05)
+    with pytest.raises(aiopanel.CannotConnect):
+        await client.recv(timeout=0.5)
+    writer.release.set()
+
+
+async def test_sends_keep_their_order() -> None:
+    """One frame at a time, in the order the callers asked for."""
+
+    class CountingWriter:
+        def __init__(self) -> None:
+            self.frames: list[bytes] = []
+
+        def write(self, data: bytes) -> None:
+            self.frames.append(data)
+
+        async def drain(self) -> None:
+            await asyncio.sleep(0)
+
+    writer = CountingWriter()
+    client = _writing(writer)
+    await asyncio.gather(*[client.send({"t": "ping", "n": n}) for n in range(20)])
+    assert [json.loads(f[4:])["n"] for f in writer.frames] == list(range(20))
+
+
+async def test_close_aborts_a_transport_that_will_not_flush() -> None:
+    """Shutdown is bounded too: a transport that cannot flush is aborted."""
+
+    class StuckTransport:
+        def __init__(self) -> None:
+            self.aborted = False
+
+        def abort(self) -> None:
+            self.aborted = True
+
+    class StuckWriter:
+        def __init__(self) -> None:
+            self.transport = StuckTransport()
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+        async def wait_closed(self) -> None:
+            await asyncio.Event().wait()
+
+    writer = StuckWriter()
+    client = _writing(writer)
+    await client.close(timeout=0.02)
+    assert writer.closed
+    assert writer.transport.aborted
+
+
+# ---- state messages the protocol does not allow (HA05) -----------------------------
+
+
+def test_the_panels_own_objects_are_accepted() -> None:
+    """The shapes the firmware writes, nulls and all, go in unchanged."""
+    state = aiopanel.PanelState()
+    state.apply(PANEL_SNAPSHOT)
+    assert state.ready
+    assert state.seq == 7
+    assert state.partitions is not None and state.partitions[1].ha_state == "disarmed"
+    assert state.zones is not None
+    assert state.zones[1].device_class == ""  # null means "none", not a failure
+    assert state.zones[1].partition == 1
+
+
+BAD_STATE_MESSAGES = [
+    {"t": "delta", "zones": [{"name": "no zone number"}]},
+    {"t": "delta", "zones": [{"zone": "1"}]},
+    {"t": "delta", "zones": [{"zone": True}]},
+    {"t": "delta", "zones": [{"zone": 0}]},
+    {"t": "delta", "zones": [{"zone": aiopanel.ZONE_MAX + 1}]},
+    {"t": "delta", "zones": [{"zone": 1, "open": 1}]},
+    {"t": "delta", "zones": [{"zone": 1, "name": 7}]},
+    {"t": "delta", "zones": [{"zone": 1, "partition": aiopanel.PARTITION_MAX + 1}]},
+    {"t": "delta", "zones": ["not an object"]},
+    {"t": "delta", "zones": "not an array"},
+    {"t": "delta", "partitions": [{"name": "no partition number"}]},
+    {"t": "delta", "partitions": [{"partition": 0}]},
+    {"t": "delta", "partitions": [{"partition": 1, "ready": "yes"}]},
+    {"t": "delta", "partitions": [{"partition": 1, "ha_state": 3}]},
+    {"t": "delta", "partitions": {"partition": 1}},
+    {"t": "delta", "seq": "8"},
+    {"t": "delta", "seq": -1},
+    {"t": "delta", "troubles": []},
+]
+
+
+@pytest.mark.parametrize("msg", BAD_STATE_MESSAGES)
+def test_a_malformed_state_message_is_invalid_and_changes_nothing(
+    msg: dict[str, Any],
+) -> None:
+    """Missing, wrongly typed and out-of-range fields are InvalidMessage - not
+    a KeyError out of a listener - and the state stays exactly as it was."""
+    state = aiopanel.PanelState()
+    state.apply(PANEL_SNAPSHOT)
+    before = (state.seq, dict(state.zones or {}), dict(state.partitions or {}), state.troubles)
+    with pytest.raises(aiopanel.InvalidMessage):
+        state.apply(msg)
+    assert (state.seq, state.zones, state.partitions, state.troubles) == before
+
+
+def test_a_rejected_delta_applies_none_of_it() -> None:
+    """The good zone in front of the bad one is not folded in either (HA05)."""
+    state = aiopanel.PanelState()
+    state.apply(PANEL_SNAPSHOT)
+    with pytest.raises(aiopanel.InvalidMessage):
+        state.apply(
+            {
+                "t": "delta",
+                "seq": 9,
+                "zones": [{**PANEL_ZONE, "open": True}, {"name": "no zone number"}],
+            }
+        )
+    assert state.zones is not None and state.zones[1].open is False
+    assert state.seq == 7
+
+
+def test_an_invalid_first_snapshot_leaves_the_state_unready() -> None:
+    """Nothing to show and nothing half-built: the caller has to reconnect."""
+    state = aiopanel.PanelState()
+    with pytest.raises(aiopanel.InvalidMessage):
+        state.apply({"t": "snapshot", "seq": 1, "zones": [{"name": "no zone number"}]})
+    assert not state.ready
+    assert state.zones is None
+
+
+def test_a_delta_before_a_snapshot_is_invalid() -> None:
+    """A delta means nothing without the snapshot it changes."""
+    state = aiopanel.PanelState()
+    with pytest.raises(aiopanel.InvalidMessage):
+        state.apply({"t": "delta", "zones": [PANEL_ZONE]})
+    assert not state.ready
+
+
+def test_zones_cannot_grow_past_the_bound() -> None:
+    """Zone numbers are checked against the protocol's range, so a peer cannot
+    grow this state message after message - and the refusal is visible."""
+    state = aiopanel.PanelState()
+    state.apply({**PANEL_SNAPSHOT, "zones": []})
+    for zone in range(1, 6):  # accumulation across deltas is by zone number
+        state.apply({"t": "delta", "zones": [{**PANEL_ZONE, "zone": zone}]})
+    assert state.zones is not None and len(state.zones) == 5
+    state.apply(
+        {
+            "t": "delta",
+            "zones": [{**PANEL_ZONE, "zone": z} for z in range(1, aiopanel.ZONE_MAX + 1)],
+        }
+    )
+    assert len(state.zones) == aiopanel.ZONE_MAX
+    with pytest.raises(aiopanel.InvalidMessage):
+        state.apply({"t": "delta", "zones": [{**PANEL_ZONE, "zone": aiopanel.ZONE_MAX + 1}]})
+    assert len(state.zones) == aiopanel.ZONE_MAX

@@ -1,0 +1,134 @@
+bypass_zone:
+  name: Bypass zone
+  description: Bypass one zone using the panel authorization rules.
+  fields:
+    entry_id:
+      name: Panel
+      required: true
+      selector:
+        config_entry:
+          integration: roboalarms
+    code:
+      name: User code
+      required: true
+      selector:
+        text:
+          type: password
+    partition:
+      name: Partition
+      default: 1
+      selector:
+        number:
+          min: 1
+          max: 8
+          mode: box
+    zone:
+      name: Zone
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 128
+          mode: box
+unbypass_zone:
+  name: Unbypass zone
+  description: Restore one bypassed zone.
+  fields:
+    entry_id:
+      name: Panel
+      required: true
+      selector:
+        config_entry:
+          integration: roboalarms
+    code:
+      name: User code
+      required: true
+      selector:
+        text:
+          type: password
+    partition:
+      name: Partition
+      default: 1
+      selector:
+        number:
+          min: 1
+          max: 8
+          mode: box
+    zone:
+      name: Zone
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 128
+          mode: box
+arm:
+  name: Arm
+  description: Arm with optional silent exit or instant entry response.
+  fields:
+    entry_id:
+      name: Panel
+      required: true
+      selector:
+        config_entry:
+          integration: roboalarms
+    code:
+      name: User code
+      required: true
+      selector:
+        text:
+          type: password
+    partition:
+      name: Partition
+      default: 1
+      selector:
+        number:
+          min: 1
+          max: 8
+          mode: box
+    level:
+      name: Arming level
+      required: true
+      selector:
+        select:
+          options: [stay, away, night]
+    silent_exit:
+      name: Silent exit
+      default: false
+      selector:
+        boolean:
+    no_entry_delay:
+      name: No entry delay
+      default: false
+      selector:
+        boolean:
+panic:
+  name: Panic
+  description: Request a panic alarm. The panel refuses this unless remote panic is enabled.
+  fields:
+    entry_id:
+      name: Panel
+      required: true
+      selector:
+        config_entry:
+          integration: roboalarms
+    code:
+      name: User code
+      required: true
+      selector:
+        text:
+          type: password
+    partition:
+      name: Partition
+      default: 1
+      selector:
+        number:
+          min: 1
+          max: 8
+          mode: box
+    panic:
+      name: Panic type
+      required: true
+      selector:
+        select:
+          options: [police, fire, medical]

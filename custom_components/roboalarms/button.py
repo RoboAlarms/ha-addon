@@ -7,7 +7,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .coordinator import RoboAlarmsConfigEntry, RoboAlarmsCoordinator
-from .entity import RoboAlarmsEntity
+from .entity import RoboAlarmsPartitionEntity, async_add_partition_entities
 
 
 async def async_setup_entry(
@@ -15,20 +15,18 @@ async def async_setup_entry(
     entry: RoboAlarmsConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """One exit-restart button per partition in the first snapshot."""
+    """One exit-restart button per partition, including ones the panel adds later (HA09)."""
     coordinator = entry.runtime_data
-    assert coordinator.data is not None and coordinator.data.partitions is not None
-    async_add_entities(RoboAlarmsExitRestart(coordinator, p) for p in coordinator.data.partitions)
+    async_add_partition_entities(coordinator, entry, async_add_entities, RoboAlarmsExitRestart)
 
 
-class RoboAlarmsExitRestart(RoboAlarmsEntity, ButtonEntity):
+class RoboAlarmsExitRestart(RoboAlarmsPartitionEntity, ButtonEntity):
     """Start the exit time over while it is running."""
 
     _attr_translation_key = "exit_restart"
 
     def __init__(self, coordinator: RoboAlarmsCoordinator, partition: int) -> None:
-        super().__init__(coordinator)
-        self._partition = partition
+        super().__init__(coordinator, partition)
         self._attr_unique_id = f"{self.panel_id}_p{partition}_exit_restart"
         if partition != 1:
             self._attr_translation_placeholders = {"partition": f" {partition}"}

@@ -20,6 +20,12 @@ jobs:
           python-version: "3.14"
       - name: Install test dependencies
         run: pip install -r requirements_test.txt
+      - name: Check standalone client source
+        run: python scripts/sync_protocol.py --check
+      - name: Build standalone client
+        run: |
+          pip install build
+          python -m build
       - name: Run tests
         run: pytest
 

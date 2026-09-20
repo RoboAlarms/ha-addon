@@ -7,11 +7,22 @@ results are matched back by id (HAI-007). The link keeps itself alive with
 pings after 30 quiet seconds and gives up at 90 (protocol.md), then
 reconnects with backoff while the entities show unavailable.
 
+Every connection is a generation of its own. It starts from an empty
+PanelState and publishes nothing until that connection has sent a snapshot
+of its own, so a delta can never be folded into the previous session's
+baseline (HA12). The same dispatcher reads the messages during that
+resynchronisation and afterwards, because the panel sends its watch list
+*before* its first snapshot (ha_link.c, push_state) and throwing it away
+leaves every sensor it binds silent (HA01).
+
 The other direction is HAI-009: the entities the options allow are sent to
 the panel as a paged catalog, the panel answers with the ones its zones are
-bound to, and their states are pushed as they change. The catalog also says
-which of them the panel's Devices screen may act on (Features/24), and a
-`call` for one of those is executed here. Nothing outside the options lists
+bound to, and their states are pushed as they change - on every connection,
+because the panel demands fresh state from every sensor after a link comes
+back and shows CHECK otherwise (Features/22, ZSRC-015). The catalog also
+says which of them the panel's Devices screen may act on (Features/24); a
+`call` for one of those runs beside the receive loop, never in it, so a
+slow lamp cannot delay an alarm (HA03). Nothing outside the options lists
 ever leaves Home Assistant or is acted on.
 """
 
@@ -20,17 +31,20 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
+from contextlib import suppress
+from functools import partial
 from typing import Any, NamedTuple
 from uuid import uuid4
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT, STATE_UNAVAILABLE, STATE_UNKNOWN
-from homeassistant.core import Event, EventStateChangedData, HomeAssistant
+from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
@@ -55,13 +69,20 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-_FIRST_SNAPSHOT_S = 15.0
+_FIRST_SNAPSHOT_S = 15.0  # every connection's own resynchronisation deadline
 _QUIET_PING_S = 30.0
 _QUIET_LIMIT = 3  # three quiet ping rounds (90 s) and the link is dead
 _BACKOFF_MIN_S = 5.0
 _BACKOFF_MAX_S = 60.0
 _COMMAND_TIMEOUT_S = 15.0
 _CATALOG_PAGE = 20  # entities per catalog message; a full catalog can't fit one frame
+# One `call` from the panel's Devices screen gets this long. Shorter than the
+# panel's own HC_ACT_TIMEOUT_MS (30 s, home_control.h), so it hears a real
+# answer rather than timing the action out by itself.
+_CALL_TIMEOUT_S = 25.0
+_CALLS_MAX = 8  # device actions running at once; the rest are refused, not queued
+_CALL_STOP_S = 5.0  # how long unload waits for cancelled calls to let go
+_ANSWERED_MAX = 64  # call ids remembered per connection, so a repeat isn't re-run
 
 type RoboAlarmsConfigEntry = ConfigEntry[RoboAlarmsCoordinator]
 
@@ -160,7 +181,12 @@ class RoboAlarmsCoordinator(DataUpdateCoordinator[PanelState]):
         self._pending: dict[str, asyncio.Future[dict[str, Any]]] = {}
         self._watched: list[str] = []
         self._panel_watch: list[str] = []  # as the panel asked, before the allow-list
+        self._watch_seen = False  # the panel repeated its list on this connection
         self._unwatch: Callable[[], None] | None = None
+        self._outbox: dict[str, None] = {}  # entities whose newest state is owed
+        self._draining = False
+        self._calls: dict[str, asyncio.Task] = {}  # device actions running right now
+        self._answered: dict[str, str] = {}  # call id -> the one answer it was given
 
     # ---- connecting ---------------------------------------------------------------
 
@@ -174,90 +200,178 @@ class RoboAlarmsCoordinator(DataUpdateCoordinator[PanelState]):
         client = PanelClient(entry.data[CONF_HOST], entry.data[CONF_PORT], ssl=self._ssl)
         try:
             self.info = await client.connect()
+            if entry.unique_id and self.info.panel_id != entry.unique_id:
+                raise WrongPanel("the address belongs to another panel")
+            if not self.info.paired:
+                raise WrongPanel("the panel has been unpaired; pair again")
             der = client.panel_cert_der
             if der is not None and hashlib.sha256(der).hexdigest() != entry.data[CONF_PANEL_FP]:
                 # Not the panel this entry paired with (a factory reset, or an impostor).
                 raise WrongPanel("the panel's certificate isn't the pinned one")
+        except UnsupportedVersion:
+            ir.async_create_issue(
+                self.hass,
+                DOMAIN,
+                f"unsupported_protocol_{entry.entry_id}",
+                is_fixable=False,
+                severity=ir.IssueSeverity.ERROR,
+                translation_key="unsupported_protocol",
+                translation_placeholders={"name": entry.title},
+            )
+            await client.close()
+            raise
         except BaseException:
             await client.close()
             raise
+        ir.async_delete_issue(self.hass, DOMAIN, f"unsupported_protocol_{entry.entry_id}")
         return client
 
     async def async_start(self) -> None:
         """First connection and first snapshot, then the listening task.
 
         Raises toward setup so a dead panel becomes ConfigEntryNotReady there.
+        The connection is owned here until the listening task exists; anything
+        that ends this method before then - an error, or a cancellation while
+        the first snapshot is still on its way - closes it rather than leaving
+        the panel's single connection slot occupied (HA07).
         """
         client = await self._async_connect()
-        state = PanelState()
-        try:
-            async with asyncio.timeout(_FIRST_SNAPSHOT_S):
-                while not state.ready:
-                    msg = await client.recv()
-                    if msg.get("t") == "snapshot":
-                        state.apply(msg)
-        except (TimeoutError, LinkError):
-            await client.close()
-            raise CannotConnect("the panel never sent its snapshot") from None
         self._client = client
-        self.async_set_updated_data(state)
-        await self._async_send_catalog()
-        self.config_entry.async_on_unload(
-            self.config_entry.add_update_listener(self._async_entry_updated)
-        )
-        self._task = self.config_entry.async_create_background_task(
-            self.hass, self._async_run(), name=f"{DOMAIN} link"
-        )
+        started = False
+        try:
+            state = await self._async_resync(client)
+            self.async_set_updated_data(state)
+            await self._async_after_connect()
+            self.config_entry.async_on_unload(
+                self.config_entry.add_update_listener(self._async_entry_updated)
+            )
+            self._task = self.config_entry.async_create_background_task(
+                self.hass, self._async_run(state), name=f"{DOMAIN} link"
+            )
+            started = True
+        finally:
+            if not started:
+                await self._async_end_session()
 
     async def async_shutdown(self) -> None:
-        """Unload: stop the task and close the connection."""
-        if self._task is not None:
-            self._task.cancel()
-            self._task = None
-        self._async_drop_watch()
-        if self._client is not None:
-            await self._client.close()
-            self._client = None
+        """Unload: stop the task, wait for it, and let go of everything."""
+        task, self._task = self._task, None
+        calls = list(self._calls.values())  # before the task's own cleanup clears them
+        if task is not None:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+        await self._async_end_session()
+        pending = [call for call in calls if not call.done()]
+        if pending:
+            # they were cancelled above; give them a bounded moment to unwind
+            await asyncio.wait(pending, timeout=_CALL_STOP_S)
         await super().async_shutdown()
+
+    async def _async_end_session(self) -> None:
+        """Let go of everything one connection owned.
+
+        Run on every link failure and at unload, so nothing outlives its
+        generation: the subscription stops, the device actions are cancelled,
+        the commands waiting for an answer are told, and the socket is closed.
+        The next connection therefore starts from an empty state (HA05, HA12).
+        """
+        self._async_drop_watch()
+        self._answered.clear()
+        for call in self._calls.values():
+            call.cancel()
+        self._calls.clear()
+        for fut in self._pending.values():
+            if not fut.done():
+                fut.set_exception(CannotConnect("the link dropped"))
+        self._pending.clear()
+        client, self._client = self._client, None
+        if client is not None:
+            await client.close()
+
+    async def _async_link_failed(self, err: LinkError) -> None:
+        """A send that gave up means this connection is finished (HA11).
+
+        Closing it here is what turns a wedged link into a reconnect: the
+        listening loop's next recv fails and the loop below takes over, rather
+        than carrying on over a link that can no longer be answered.
+        """
+        _LOGGER.debug("%s: the link failed while sending: %s", self.name, err)
+        client = self._client
+        if client is not None:
+            await client.close()
 
     # ---- the listening loop -------------------------------------------------------
 
-    async def _async_run(self) -> None:
+    async def _async_run(self, state: PanelState) -> None:
+        """Follow the panel, reconnecting for as long as the entry is loaded."""
+        try:
+            await self._async_link(state)
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:  # noqa: BLE001 - a dead receiver must never look healthy
+            # Not a link error: a bug here would otherwise leave the entities
+            # available on state nothing is maintaining any more (HA05).
+            _LOGGER.exception("%s: the panel link stopped unexpectedly", self.name)
+            self.async_set_update_error(UpdateFailed(f"the panel link stopped: {err}"))
+        finally:
+            await self._async_end_session()
+
+    async def _async_link(self, state: PanelState | None) -> None:
         backoff = _BACKOFF_MIN_S
         while True:
             try:
-                if self._client is None:
-                    self._client = await self._async_connect()
-                    # data continues from the fresh snapshot the panel sends
-                    await self._async_send_catalog()
-                await self._async_listen(self._client)
+                client = self._client
+                if client is None:
+                    client = self._client = await self._async_connect()
+                    state = None  # a new connection, a new generation
+                if state is None:
+                    # Nothing is published until this connection has sent a
+                    # snapshot of its own (HA12); the watch list the panel
+                    # sends first is handled on the way (HA01).
+                    state = await self._async_resync(client)
+                    self.async_set_updated_data(state)
+                    await self._async_after_connect()
+                    backoff = _BACKOFF_MIN_S
+                await self._async_listen(client, state)
             except asyncio.CancelledError:
                 raise
             except WrongPanel as err:
                 _LOGGER.error("%s: %s", self.name, err)
                 self.async_set_update_error(UpdateFailed(str(err)))
-                self._async_drop_watch()
+                await self._async_end_session()
                 # a factory-reset panel: the person must pair again (HAI-004)
                 self.config_entry.async_start_reauth(self.hass)
                 return
             except (CannotConnect, InvalidMessage, UnsupportedVersion, TimeoutError) as err:
                 self.async_set_update_error(UpdateFailed(str(err)))
-                # The panel asks again for what it watches on the next connection.
-                self._async_drop_watch()
-                if self._client is not None:
-                    await self._client.close()
-                    self._client = None
-                for fut in self._pending.values():
-                    if not fut.done():
-                        fut.set_exception(CannotConnect("the link dropped"))
-                self._pending.clear()
+                await self._async_end_session()
+                state = None
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, _BACKOFF_MAX_S)
-            else:
-                backoff = _BACKOFF_MIN_S
 
-    async def _async_listen(self, client: PanelClient) -> None:
-        state = self.data if self.data is not None and self.data.ready else PanelState()
+    async def _async_resync(self, client: PanelClient) -> PanelState:
+        """Read until this connection has given a snapshot of its own.
+
+        Bounded by a wall-clock deadline that nothing on the wire extends, so
+        a peer that answers pings for ever but never resynchronises is a
+        failed connection rather than a silent one (HA12). Everything else the
+        panel sends first is dispatched as usual - the firmware sends its
+        watch list before the snapshot, and dropping it would leave every
+        sensor bound to a zone silent until the options changed (HA01).
+        """
+        state = PanelState()
+        self._watch_seen = False
+        try:
+            async with asyncio.timeout(_FIRST_SNAPSHOT_S):
+                while not state.ready:
+                    msg = await client.recv(timeout=_FIRST_SNAPSHOT_S)
+                    await self._async_handle(state, msg)
+        except TimeoutError:
+            raise CannotConnect("the panel never sent its snapshot") from None
+        return state
+
+    async def _async_listen(self, client: PanelClient, state: PanelState) -> None:
         quiet = 0
         while True:
             try:
@@ -266,30 +380,57 @@ class RoboAlarmsCoordinator(DataUpdateCoordinator[PanelState]):
                 quiet += 1
                 if quiet >= _QUIET_LIMIT:
                     raise CannotConnect("the panel went quiet") from None
-                await client.send({"t": "ping"})
+                await client.send({"t": "ping"}, timeout=_QUIET_PING_S)
                 continue
             quiet = 0
-            t = msg.get("t")
-            if t in ("snapshot", "delta"):
-                state.apply(msg)
+            if await self._async_handle(state, msg):
                 self.async_set_updated_data(state)
-            elif t == "event":
-                self.hass.bus.async_fire(f"{DOMAIN}_event", msg)
-            elif t == "result":
-                fut = self._pending.pop(str(msg.get("id") or ""), None)
-                if fut is not None and not fut.done():
-                    fut.set_result(msg)
-            elif t == "watch":
-                await self._async_watch(msg.get("ids"))
-            elif t == "call":
-                await self._async_call(msg)
+
+    async def _async_handle(self, state: PanelState, msg: dict[str, Any]) -> bool:
+        """One message from the panel. True when it moved the panel's state.
+
+        The same dispatcher serves the resynchronisation and the connection
+        afterwards, so message types cannot be silently dropped depending on
+        when they arrive (HA01).
+        """
+        t = msg.get("t")
+        if t in ("snapshot", "delta"):
+            state.apply(msg)
+            return True
+        if t == "status":
+            state.apply_status(msg)
+            return state.ready
+        if t == "event":
+            # Which panel this came from is this coordinator's own entry, never
+            # a field off the wire: one panel's alarm must not reach another
+            # panel's event entity or its automations (HA04). The bus event
+            # itself stays global so "any panel" automations keep working.
+            self.hass.bus.async_fire(
+                f"{DOMAIN}_event", {**msg, "entry_id": self.config_entry.entry_id}
+            )
+        elif t == "result":
+            fut = self._pending.pop(str(msg.get("id") or ""), None)
+            if fut is not None and not fut.done():
+                fut.set_result(msg)
+        elif t == "watch":
+            self._watch_seen = True
+            await self._async_watch(msg.get("ids"))
+        elif t == "call":
+            self._async_start_call(msg)
+        return False
 
     # ---- what the panel may see (HAI-009) -------------------------------------------
 
     def _option_list(self, key: str) -> list[str]:
         """One of the two options lists, in the order chosen."""
         chosen = self.config_entry.options.get(key) or []
-        return [entity_id for entity_id in chosen if isinstance(entity_id, str)]
+        registry = er.async_get(self.hass)
+        return [
+            entity_id
+            for entity_id in chosen
+            if isinstance(entity_id, str)
+            and ((entity := registry.async_get(entity_id)) is None or entity.platform != DOMAIN)
+        ]
 
     @property
     def _allowed(self) -> list[str]:
@@ -307,6 +448,20 @@ class RoboAlarmsCoordinator(DataUpdateCoordinator[PanelState]):
         catalogued = list(self._allowed)
         catalogued += [e for e in self._controllable if e not in catalogued]
         return catalogued
+
+    @property
+    def _subscribed(self) -> list[str]:
+        """Everything this link follows in Home Assistant.
+
+        The sensors the panel watches for its zones, plus every entity it may
+        act on - a light or a lock the panel can operate has to show what it
+        is doing, without anyone having to share it as an alarm sensor as
+        well (HA02). An entity in both lists appears once, so it gets one
+        subscription and one stream of updates.
+        """
+        following = list(self._watched)
+        following += [e for e in self._controllable if e not in following]
+        return following
 
     def _area_name(self, entity_id: str) -> str:
         """Where the entity is, by its own area or the one its device sits in."""
@@ -344,11 +499,7 @@ class RoboAlarmsCoordinator(DataUpdateCoordinator[PanelState]):
         }
 
     async def _async_send_catalog(self) -> None:
-        """Send the allowed entities as pages; page 0 replaces what the panel had.
-
-        A dropped link is not worth reporting here: the listening loop sees it
-        too, and the catalog goes out again on the next connection.
-        """
+        """Send the allowed entities as pages; page 0 replaces what the panel had."""
         client = self._client
         if client is None:
             return
@@ -373,9 +524,27 @@ class RoboAlarmsCoordinator(DataUpdateCoordinator[PanelState]):
                         ],
                     }
                 )
+            except CannotConnect as err:
+                await self._async_link_failed(err)
+                return
             except LinkError as err:
                 _LOGGER.debug("%s: the catalog could not be sent: %s", self.name, err)
                 return
+
+    async def _async_after_connect(self) -> None:
+        """Everything a fresh connection is owed, once its snapshot is in.
+
+        The panel supervises a source's whole link: when it comes back, every
+        sensor bound to it has to report again within its grace (120 s for
+        Home Assistant) or its zone goes to CHECK (Features/22, ZSRC-015). So
+        the current state of every followed entity goes out on *every*
+        connection, not only the first - including a reconnection where the
+        panel's watch list has not changed and it did not repeat it.
+        """
+        await self._async_send_catalog()
+        if not self._watch_seen and self._panel_watch:
+            await self._async_watch(list(self._panel_watch))
+        await self._async_push_control()
 
     async def _async_watch(self, ids: Any) -> None:
         """The panel's watch list: the allowed part of it, the rest ignored."""
@@ -386,26 +555,70 @@ class RoboAlarmsCoordinator(DataUpdateCoordinator[PanelState]):
             if isinstance(entity_id, str)
         ]
         self._panel_watch = asked  # kept whole: options may allow more of it later
-        watched = [entity_id for entity_id in asked if entity_id in allowed]
-        self._async_drop_watch()
-        self._watched = watched
-        if watched:
-            self._unwatch = async_track_state_change_event(
-                self.hass, watched, self._async_state_changed
-            )
-        for entity_id in watched:
+        self._watched = [entity_id for entity_id in asked if entity_id in allowed]
+        self._async_resubscribe()
+        await self._async_push_states(self._watched)
+
+    async def _async_push_control(self) -> None:
+        """The current state of every controllable entity the watch list does
+        not already cover - one subscription, one update stream (HA02)."""
+        watched = set(self._watched)
+        await self._async_push_states([e for e in self._controllable if e not in watched])
+
+    async def _async_push_states(self, entity_ids: Iterable[str]) -> None:
+        """Tell the panel where each of these entities stands right now."""
+        for entity_id in entity_ids:
             await self._async_send_state(entity_id)
 
+    @callback
+    def _async_resubscribe(self) -> None:
+        """One state-change subscription covering everything this link follows.
+
+        Rebuilt whenever the watch list or the options change, so an entity
+        the options no longer allow stops being followed at once.
+        """
+        if self._unwatch is not None:
+            self._unwatch()
+            self._unwatch = None
+        following = self._subscribed
+        stale = set(self._outbox) - set(following)
+        for entity_id in stale:
+            del self._outbox[entity_id]
+        if following:
+            self._unwatch = async_track_state_change_event(
+                self.hass, following, self._async_state_changed
+            )
+
+    @callback
     def _async_drop_watch(self) -> None:
-        """Stop following the watched entities (link gone, or a new watch list)."""
+        """Stop following anything (the link is gone)."""
         if self._unwatch is not None:
             self._unwatch()
             self._unwatch = None
         self._watched = []
+        self._outbox.clear()
 
     async def _async_state_changed(self, event: Event[EventStateChangedData]) -> None:
-        """A watched entity moved: the panel hears about it at once (HAI-006)."""
-        await self._async_send_state(event.data["entity_id"])
+        """A followed entity moved: the panel hears about it at once (HAI-006).
+
+        While one send is in flight the others wait here as one entry per
+        entity, so a burst cannot grow into a queue of encoded payloads
+        (HA11). Nothing is lost to a cap: every entity that changed still has
+        its current state sent, and the send below reads that state when it
+        gets there, so what goes out is the newest rather than a backlog of
+        superseded ones.
+        """
+        self._outbox[event.data["entity_id"]] = None
+        if self._draining:
+            return
+        self._draining = True
+        try:
+            while self._outbox:
+                entity_id = next(iter(self._outbox))  # oldest first
+                del self._outbox[entity_id]
+                await self._async_send_state(entity_id)
+        finally:
+            self._draining = False
 
     async def _async_send_state(self, entity_id: str) -> None:
         """One state message. Unknown, unavailable or gone is avail false: the
@@ -424,6 +637,10 @@ class RoboAlarmsCoordinator(DataUpdateCoordinator[PanelState]):
                     "avail": avail,
                 }
             )
+        except CannotConnect as err:
+            # Not one unlucky message: the link is finished (HA11). Close it so
+            # the state goes out again on the connection that replaces it.
+            await self._async_link_failed(err)
         except LinkError as err:
             _LOGGER.debug("%s: %s could not be sent: %s", self.name, entity_id, err)
 
@@ -433,49 +650,112 @@ class RoboAlarmsCoordinator(DataUpdateCoordinator[PanelState]):
         starts without waiting for a reconnect."""
         await self._async_send_catalog()
         await self._async_watch(list(self._panel_watch))
+        await self._async_push_control()
 
     # ---- what the panel may do: its Devices screen (Features/24) ---------------------
 
-    async def _async_call(self, msg: dict[str, Any]) -> None:
-        """Execute one `call` from the panel, and answer it exactly once.
+    @callback
+    def _async_start_call(self, msg: dict[str, Any]) -> None:
+        """Take one `call` from the panel and run it beside the receive loop.
 
-        The entity must be in the control options and the action must be one
-        Features/24 lists for that entity's domain; anything else is answered
-        not_allowed rather than guessed at. The user code an unlock or an open
-        needs is checked on the panel (HCTL-005) and never crosses this link.
+        The alarm's own traffic must never wait behind a device action (HA03),
+        so the service call gets its own task and its own deadline. Each
+        accepted id is answered exactly once: an id already running is left to
+        the task running it, and an id already answered is given the same
+        answer again rather than acted on twice - repeating a lock or a cover
+        whose outcome is uncertain is worse than repeating the answer.
         """
         call_id = msg.get("id")
         if call_id is None or call_id == "":
             # Nothing to answer to: a result without an id means nothing there.
             return
+        key = str(call_id)
+        if key in self._calls:
+            return  # still running; its own task sends the one answer
+        if key in self._answered:
+            self._async_answer_later(call_id, self._answered[key])
+            return
+        if len(self._calls) >= _CALLS_MAX:
+            _LOGGER.debug("%s: %s device actions already running", self.name, _CALLS_MAX)
+            self._remember(key, "failed")
+            self._async_answer_later(call_id, "failed")
+            return
+        task = self.config_entry.async_create_background_task(
+            self.hass, self._async_call(key, msg), name=f"{DOMAIN} call {key}"
+        )
+        self._calls[key] = task
+        task.add_done_callback(partial(self._async_call_done, key))
+
+    @callback
+    def _async_call_done(self, key: str, task: asyncio.Task) -> None:
+        """One device action finished: stop tracking exactly that task."""
+        if self._calls.get(key) is task:
+            del self._calls[key]
+
+    @callback
+    def _async_answer_later(self, call_id: Any, error: str) -> None:
+        """Answer a call without making the receive loop wait for the send."""
+        self.config_entry.async_create_background_task(
+            self.hass, self._async_call_result(call_id, error), name=f"{DOMAIN} call answer"
+        )
+
+    def _remember(self, key: str, error: str) -> None:
+        """The answer an id was given, for as long as this connection lasts."""
+        self._answered[key] = error
+        while len(self._answered) > _ANSWERED_MAX:
+            self._answered.pop(next(iter(self._answered)))
+
+    async def _async_call(self, key: str, msg: dict[str, Any]) -> None:
+        """Run one device action and answer it exactly once."""
+        try:
+            error = await self._async_act(msg)
+        except asyncio.CancelledError:
+            # Unload, or the link went: no answer can reach the panel anyway,
+            # and it fails the action itself after its own 30 s (HCTL-012).
+            raise
+        except Exception:  # noqa: BLE001 - the panel gets one word, whatever broke
+            _LOGGER.exception("%s: a device action from the panel failed", self.name)
+            error = "failed"
+        self._remember(key, error)
+        await self._async_call_result(msg.get("id"), error)
+
+    async def _async_act(self, msg: dict[str, Any]) -> str:
+        """Carry out one `call`; the empty string means it worked.
+
+        The entity must be in the control options and the action must be one
+        Features/24 lists for that entity's domain; anything else is answered
+        not_allowed rather than guessed at. Both are checked here, when the
+        action actually runs, so an entity the options stopped allowing while
+        this was queued is refused rather than acted on. The user code an
+        unlock or an open needs is checked on the panel (HCTL-005) and never
+        crosses this link.
+        """
         entity_id = msg.get("entity")
         action = msg.get("action")
         if not isinstance(entity_id, str) or not isinstance(action, str):
-            await self._async_call_result(call_id, "not_allowed")
-            return
+            return "not_allowed"
         domain = entity_id.partition(".")[0]
         wanted = _CALLS.get(domain, {}).get(action)
         if entity_id not in self._controllable or wanted is None:
-            await self._async_call_result(call_id, "not_allowed")
-            return
+            return "not_allowed"
         data = _call_data(wanted, msg)
         if data is None:
-            await self._async_call_result(call_id, "not_allowed")
-            return
+            return "not_allowed"
         state = self.hass.states.get(entity_id)
         if state is None or state.state == STATE_UNAVAILABLE:
-            await self._async_call_result(call_id, "unavailable")
-            return
+            return "unavailable"
         try:
-            await self.hass.services.async_call(
-                domain, wanted.service, {"entity_id": entity_id, **data}, blocking=True
-            )
-        except Exception as err:
-            # Whatever went wrong in Home Assistant, the panel hears one word.
+            async with asyncio.timeout(_CALL_TIMEOUT_S):
+                await self.hass.services.async_call(
+                    domain, wanted.service, {"entity_id": entity_id, **data}, blocking=True
+                )
+        except TimeoutError:
+            _LOGGER.debug("%s: %s %s did not finish in time", self.name, entity_id, action)
+            return "timeout"
+        except Exception as err:  # noqa: BLE001 - the panel hears one word
             _LOGGER.debug("%s: %s %s failed: %s", self.name, entity_id, action, err)
-            await self._async_call_result(call_id, "failed")
-            return
-        await self._async_call_result(call_id, "")
+            return "failed"
+        return ""
 
     async def _async_call_result(self, call_id: Any, error: str) -> None:
         """The one answer a call gets; the id comes back as it was sent."""
@@ -484,6 +764,8 @@ class RoboAlarmsCoordinator(DataUpdateCoordinator[PanelState]):
             return
         try:
             await client.send({"t": "call_result", "id": call_id, "ok": not error, "error": error})
+        except CannotConnect as err:
+            await self._async_link_failed(err)
         except LinkError as err:
             _LOGGER.debug("%s: the call result could not be sent: %s", self.name, err)
 
@@ -498,9 +780,17 @@ class RoboAlarmsCoordinator(DataUpdateCoordinator[PanelState]):
         fut: asyncio.Future[dict[str, Any]] = self.hass.loop.create_future()
         self._pending[cmd_id] = fut
         try:
-            await client.send({"t": "command", "id": cmd_id, "action": action, **fields})
+            # The send is inside the deadline, not before it: a panel that
+            # stopped reading must not hold a command open past it (HA11).
             async with asyncio.timeout(_COMMAND_TIMEOUT_S):
+                await client.send(
+                    {"t": "command", "id": cmd_id, "action": action, **fields},
+                    timeout=_COMMAND_TIMEOUT_S,
+                )
                 result = await fut
+        except CannotConnect as err:
+            await self._async_link_failed(err)
+            raise HomeAssistantError("The panel did not answer the command") from err
         except (TimeoutError, LinkError) as err:
             raise HomeAssistantError("The panel did not answer the command") from err
         finally:

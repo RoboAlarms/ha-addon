@@ -25,9 +25,8 @@ panel's screen**, and the panel shows up with its partitions, zones, troubles an
 events. Everything stays on your LAN: no cloud, no MQTT broker, no credentials to type.
 
 > [!IMPORTANT]
-> **Early development.** The panel firmware's local API is being built right now, and
-> this integration is being built against it. It is not yet usable in a live Home
-> Assistant — star or watch the repository to catch the first release.
+> **Testing release.** Use a matching current panel firmware build. This release is
+> intended for development-device testing before use on an installed alarm system.
 
 ## How it works
 
@@ -51,17 +50,17 @@ the alarm state stays normal and the event is marked silent.
 |---|---|
 | Alarm control panel | One per partition, with Home / Away / Night arming |
 | Binary sensor | Every zone (door, window, motion, smoke…) with its proper device class, plus tamper, low battery and supervision diagnostics per zone, and panel-wide trouble, AC power and installer-mode sensors |
-| Sensor | Zone battery and signal where the sensor reports them; panel Wi-Fi signal and uptime |
+| Sensor | Panel Wi-Fi signal and uptime; unknown radio readings remain unknown |
 | Switch | Chime, per partition |
 | Button | Restart the exit delay |
 | Event | Panel events (armed, disarmed, alarm, trouble…) for automations |
-| Update | Panel firmware updates |
+| Update | Signed OTA release and installation status; authorize installation on the panel |
 
 Each zone is its own device under the panel, so you can assign it to an area and
 see it on your dashboards where it belongs. Zones added or renamed on the panel
-appear in Home Assistant without a restart.
+appear in Home Assistant without a restart. Deleted zones and their diagnostic devices are removed.
 
-**Planned (two-way):** an options flow to choose which Home Assistant entities the
+**Optional (two-way):** an options flow chooses which Home Assistant entities the
 panel may use as alarm zones and which devices (lights, locks, climate, covers) it
 may show on its own Devices screen. The panel only ever sees what you allow.
 
@@ -127,9 +126,9 @@ but the MQTT path remains supported by the panel firmware.
 
 | Milestone | Scope | Status |
 |---|---|---|
-| Panel local API | TLS server, pairing, state, events, commands in the panel firmware | Discovery, hello and pairing built; state, events and commands in progress |
-| Protocol client | `aioroboalarms` (inside this integration until it moves to PyPI) | Framing, hello and pairing done, tested against a fake panel |
-| This integration | Config flow, entities, diagnostics, repairs | Discovery, connection test and on-panel pairing done; entities next |
+| Panel local API | TLS server, pairing, state, events, commands in the panel firmware | Implemented, including bounded transport and durable pairing |
+| Protocol client | `aioroboalarms` (inside this integration until it moves to PyPI) | Implemented; standalone wheel available, PyPI publication pending |
+| This integration | Config flow, entities, diagnostics, repairs | Implemented: entities, actions, reauth, reconfigure, diagnostics and compatibility repairs |
 | Two-way | HA entities as panel zones, panel device control | Both directions built here: shared entities become panel zones, and the panel's device actions run against your allow-list; the panel's Devices screen itself is being built in the firmware |
 
 ## Contributing
@@ -146,3 +145,22 @@ ruff check .
 ## License
 
 [Apache-2.0](LICENSE)
+
+
+## Alarm actions and recovery
+
+Developer Tools > Actions includes `roboalarms.bypass_zone`, `roboalarms.unbypass_zone`,
+`roboalarms.arm` (with silent exit and no-entry-delay flags), and `roboalarms.panic`.
+Select the panel config entry and partition and supply a user code. The panel decides
+whether the action is allowed; remote panic is currently disabled in panel firmware
+and returns a refusal. Codes are sent for that action only, never stored by this integration.
+
+Use the integration entry's **Reconfigure** menu to change host or port without losing
+pairing, entity identities or options. The new address must present the same pinned
+certificate and panel identity. After unpairing or a factory reset, use the reauthentication
+flow and compare the new code on both screens. Incompatible protocol versions create a
+repair issue that clears when a compatible connection succeeds.
+
+Zone battery percentage and radio signal entities depend on future source telemetry;
+the current firmware reports low-battery and supervision flags instead. The update entity
+reports availability and progress but does not bypass the panel's installation authorization.

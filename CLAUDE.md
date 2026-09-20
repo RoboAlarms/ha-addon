@@ -46,7 +46,7 @@ Nothing released yet:
   commitment exchange, shows the 6-digit code in a progress step until Allow is tapped on the
   panel, and the entry stores the client identity (generated per flow with `cryptography`)
   plus the panel's pinned certificate fingerprint (`const.py` CONF_* keys). The panel side
-  (`ha_link` in the firmware repo) is built and compiles, not yet run on hardware.
+  (`ha_link` in the firmware repo) has now been paired and tested on development hardware.
 - **entities work against a fake panel**: `coordinator.py` (one connection, the snapshot at
   connect, deltas folded in, events onto the bus as `roboalarms_event`, commands matched to
   results by id, pings after 30 quiet seconds, reconnect with backoff, the pinned fingerprint
@@ -71,14 +71,21 @@ Nothing released yet:
   panel's Home screen from the firmware repo's UI preview (regenerate there, shot 01).
 - CI: hassfest + HACS validation, pytest, ruff.
 
-**Next steps (M12 order, from Features/23 tasks):**
-1. Remaining platforms: switch (chime — the panel's command is a toggle), button (exit
-   restart), sensor and the event entity, update (via the panel's OTA state) (HAI-005).
-2. Reconfigure flow (host/port without re-pairing), repair issues (HAI-011, HAI-013),
-   entity translations and icons; HAI-010 on the panel (MQTT discovery off while paired).
-3. Split `aiopanel.py` out as `aioroboalarms` on PyPI when it stabilizes.
-4. First GitHub release when a real panel pairs end to end (needs the owner's panel);
-   HACS default-store inclusion later.
+**M12 completion work (2026-09-20):**
+- Reconfigure preserves identity and pins, releases the single connection while testing,
+  and restores the old entry on failure. Protocol mismatch creates a per-entry repair;
+  unpairing or a changed identity/certificate starts reauthentication.
+- Zone diagnostics (tamper, low battery, supervision), panel trouble/AC/installer-mode,
+  uptime/Wi-Fi signal and firmware update status are implemented. Removed zones and their
+  entities/devices are reconciled without restart. Installation stays authorized on-panel.
+- Custom bypass/unbypass, arm flags and panic actions carry a code and report engine refusals.
+  Panic remains disabled by firmware policy. Own integration entities cannot be shared back.
+- Real panel numeric-comparison pairing, reconnect, snapshot/status and a Home Assistant
+  Docker setup/reconfigure/unload test pass. The firmware needed identity, retained peer
+  certificate and nested stack-buffer fixes before it worked on hardware.
+- Standalone `aioroboalarms` wheel is buildable from `protocol/`; sync check ensures identical
+  client code in HACS. PyPI account/publisher configuration is still needed for publication.
+- GitHub testing release authorized by owner. HACS default-store inclusion remains separate.
 
 **Open items:**
 - ~~Product name and domain~~ decided (owner, 2026-09-20): the project is **RoboAlarms**,
