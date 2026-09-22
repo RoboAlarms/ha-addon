@@ -14,6 +14,27 @@ Guidance for AI assistants working in this repository.
    ports, codes, panel ids, network details. Those belong in the panel repo's git-ignored
    `PANEL.local.md`, never here.
 
+## Shared continuity: Claude and Codex
+
+The owner switches between assistants. `AGENTS.md` directs Codex to this same guide; keep
+project rules and progress shared instead of maintaining a separate Codex status file.
+
+At the start, read the current status here, inspect the working tree and recent commits, and
+read the corresponding panel feature documents when available. Dated status is historical
+unless checked against the current code and evidence. Preserve unfinished work from either
+assistant and do not ask the owner to repeat context already recorded.
+
+For substantial work, record the objective, scope and decisions before implementing, update
+at meaningful checkpoints, and refresh "Where things stand" before ending or handing off.
+Include changed files, completed and pending work, tests actually run and their results,
+unrun checks or blockers, and the next concrete step. Distinguish edited, committed, released
+and hardware-verified states. Keep Features/23 (and /22 or /24 when applicable) in the panel
+repository in agreement; preserve old evidence under clearly historical headings.
+
+This repository is public: keep credentials and owner-specific details out of these notes.
+Do not use private assistant memory as the only record of essential context. No new
+authorization to commit, publish, flash or push is implied by a handoff.
+
 ## What this is
 The **HACS custom integration** (domain `roboalarms`) for the **RoboAlarms Panel** — an
 open-source touchscreen alarm panel on the Elecrow CrowPanel Advanced 7" (ESP32-P4). The
@@ -32,7 +53,19 @@ entities, commands) and **M13** (two-way: HA entities as panel zones, panel devi
 | `.github/workflows/` | `validate.yml` (hassfest + HACS action), `tests.yml` (pytest + ruff) |
 | `hacs.json` | HACS metadata; `homeassistant` is the minimum HA version (2026.3.0, needed for the in-repo brand icon) |
 
-## Where things stand (2026-09-20)
+## Where things stand (2026-09-21)
+
+Latest change: shared Claude/Codex continuity instructions and the `AGENTS.md` entry point.
+No integration implementation changed or tests ran for this documentation-only change; nothing
+was committed or published. The working tree was clean before these two instruction edits.
+
+For implementation/release status, read the panel repository's
+`Features/23-Home-Assistant-Integration/README.md` and `validation.md`: they record completed
+M12 work and the v0.1.0 testing release, superseding "Nothing released yet" in the earlier
+snapshot below. M13 Devices UI remains tracked in Features/24. Verify Git and those records
+before resuming; no fresh hardware or release validation was performed in this tracking task.
+
+## Earlier implementation snapshot (2026-09-20; partly superseded above)
 Nothing released yet:
 - **Protocol v1 exists** (spec: `Features/23/protocol.md` in the panel repo): 4-byte
   big-endian length + JSON frames on TCP 6054, `hello` both ways, numeric-comparison pairing
