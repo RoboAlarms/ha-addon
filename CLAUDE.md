@@ -49,11 +49,34 @@ entities, commands) and **M13** (two-way: HA entities as panel zones, panel devi
 | `custom_components/roboalarms/` | the integration: manifest, config flow, strings; platforms arrive as they are built |
 | `custom_components/roboalarms/brand/` | icon shown by HA/HACS (HA 2026.3+ serves it from here; home-assistant/brands no longer takes custom-integration PRs) |
 | `tests/` | pytest with `pytest-homeassistant-custom-component` |
-| `scripts/placeholder_icon.py` | regenerates the placeholder brand icon (stdlib only, no Pillow) |
+| `docs/BRAND.md`, `docs/brand/` | shared R/house logo source and the provenance of the 256/512px integration exports |
 | `.github/workflows/` | `validate.yml` (hassfest + HACS action), `tests.yml` (pytest + ruff) |
 | `hacs.json` | HACS metadata; `homeassistant` is the minimum HA version (2026.3.0, needed for the in-repo brand icon) |
 
-## Where things stand (2026-09-21)
+## Where things stand (2026-09-24)
+
+**Brand and README refresh (Codex): complete, checks passed; included in this source revision.** Owner requested
+the existing R/house logo from the docs/main website, removal of the README panel screenshot
+and caption, and clearer, consistent project copy. Updated both integration icon sizes with
+transparent exports of that exact source; retained the master in `docs/brand/`, documented
+provenance in `docs/BRAND.md`, and removed the obsolete placeholder generator and screenshot.
+README now explains the HACS integration, setup, controls and recovery, links the public guides,
+and separates the v0.1.0 integration testing release from the unreleased firmware. It also
+corrects pairing-button names/address location and marks panel Devices UI and sensor-sharing
+hardware acceptance as unfinished. Integration behavior and version are unchanged. The owner
+approved committing and pushing to `origin/main` on 2026-09-24; check Git history and remote
+tracking for delivery state. No release, live Home Assistant update or hardware test is part
+of that request. Existing unrelated edits preserved.
+
+Validation: existing offline Docker image (`roboalarms-test`, Python 3.14.7) passed protocol
+source synchronization, all 145 pytest tests, Ruff lint and formatting (29 files). README local
+links pass; `git diff --check` passes. Visually inspected the exported icon; PNG checks confirm
+256/512px RGBA and the master source SHA-256 matches the documentation asset. Hassfest/HACS CI
+and an installed Home Assistant branding refresh were not run. Next: review the push-triggered
+CI results. A release bump/install remains separate if the icon should be
+delivered to existing HACS installations.
+
+## Earlier continuity update (2026-09-21)
 
 Latest change: shared Claude/Codex continuity instructions and the `AGENTS.md` entry point.
 No integration implementation changed or tests ran for this documentation-only change; nothing
@@ -100,8 +123,8 @@ Nothing released yet:
   missing or unavailable entity `unavailable`, a service that raises `failed`, and every
   call with an id gets exactly one `call_result`. The panel's own side of both is still to
   come.
-- brand icon is a generated placeholder (shield + check); `docs/panel-home.png` is the real
-  panel's Home screen from the firmware repo's UI preview (regenerate there, shot 01).
+- At this earlier snapshot the icon was a shield/check placeholder and the README showed
+  a panel Home screenshot. Both were replaced/removed in the 2026-09-24 brand refresh above.
 - CI: hassfest + HACS validation, pytest, ruff.
 
 **M12 completion work (2026-09-20):**

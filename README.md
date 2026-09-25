@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="custom_components/roboalarms/brand/icon@2x.png" width="120" alt="RoboAlarms icon">
+  <img src="custom_components/roboalarms/brand/icon@2x.png" width="120" height="120" alt="RoboAlarms logo">
 </p>
 
-<h1 align="center">RoboAlarms Panel for Home Assistant</h1>
+<h1 align="center">RoboAlarms for Home Assistant</h1>
 
 <p align="center">
   <a href="https://github.com/RoboAlarms/ha-addon/actions/workflows/validate.yml"><img src="https://github.com/RoboAlarms/ha-addon/actions/workflows/validate.yml/badge.svg" alt="Validate"></a>
@@ -13,154 +13,165 @@
 </p>
 
 <p align="center">
-  <img src="docs/panel-home.png" width="720" alt="The RoboAlarms Panel's Home screen: Disarmed, ready to arm, with Away, Stay and Night arming">
+  <a href="https://docs.roboalarms.com/">Documentation</a> ·
+  <a href="https://docs.roboalarms.com/installer/home-assistant/">Setup guide</a> ·
+  <a href="https://github.com/RoboAlarms/ha-addon/releases">Releases</a> ·
+  <a href="https://github.com/RoboAlarms/ha-addon/issues">Report an issue</a>
 </p>
 
-<p align="center"><em><strong>RoboAlarms</strong> is an open-source alarm system — the panel firmware, the touchscreen experience above, and this Home Assistant integration — <strong>coming soon</strong>.</em></p>
+Bring your **RoboAlarms Panel** into Home Assistant. See alarm status, monitor zones,
+use panel events in automations, and arm or disarm with an authorized user code—all
+through a direct connection on your local network.
 
-A local integration for the **RoboAlarms Panel** — an open-source touchscreen alarm
-panel built on the Elecrow CrowPanel Advanced 7″ (ESP32-P4).
-Home Assistant discovers the panel on your network, you confirm the pairing **on the
-panel's screen**, and the panel shows up with its partitions, zones, troubles and
-events. Everything stays on your LAN: no cloud, no MQTT broker, no credentials to type.
+RoboAlarms is an open-source touchscreen alarm project with local alarm logic and
+optional Home Assistant integration. We develop software; we don't sell panels,
+sensors or monitoring services. This repository contains the **HACS custom
+integration**, not a Home Assistant Supervisor add-on.
 
 > [!IMPORTANT]
-> **Testing release.** Use a matching current panel firmware build. This release is
-> intended for development-device testing before use on an installed alarm system.
+> **Testing release.** This integration is available for development-device testing
+> with a matching panel firmware build. RoboAlarms' first public firmware release is
+> still ahead. The project is not a listed or certified alarm system.
 
-## How it works
+## A local connection to your alarm
 
-1. The panel advertises itself with mDNS (`_roboalarms._tcp`) while its Home
-   Assistant integration is switched on (panel: *Settings > Integrations > Home Assistant*).
-2. Home Assistant shows it under **Settings > Devices & services > Discovered**.
-3. You click **Add**, open the pairing screen on the panel, and check that both
-   screens show the **same 6-digit code** before tapping *Allow* on the panel.
-4. From then on the two talk over a mutually authenticated TLS connection with
-   pinned certificates. State changes are pushed to Home Assistant within a second;
-   the panel holds no Home Assistant credential, and Home Assistant holds no alarm code.
+- **Pair at the panel.** Compare the six-digit code on both screens before allowing
+  the connection. No Home Assistant account password or MQTT broker is needed.
+- **See changes as they happen.** The panel pushes status and events over an
+  encrypted, mutually authenticated connection with pinned certificates.
+- **Keep the panel in charge.** Alarm commands follow the same permissions and code
+  checks as the touchscreen. This integration sends a code only for the requested
+  action and does not store it.
 
-Arming and disarming from Home Assistant always requires a user code, which the
-panel checks with the same rules as its own keypad — including lockout after
-repeated wrong codes. Duress codes never reveal themselves in Home Assistant:
-the alarm state stays normal and the event is marked silent.
+The alarm engine runs on the panel; Home Assistant is optional. Sensors shared from
+Home Assistant still depend on that server and the network connection.
 
-## What you get
+## What appears in Home Assistant
 
-| Platform | Entities |
-|---|---|
-| Alarm control panel | One per partition, with Home / Away / Night arming |
-| Binary sensor | Every zone (door, window, motion, smoke…) with its proper device class, plus tamper, low battery and supervision diagnostics per zone, and panel-wide trouble, AC power and installer-mode sensors |
-| Sensor | Panel Wi-Fi signal and uptime; unknown radio readings remain unknown |
-| Switch | Chime, per partition |
-| Button | Restart the exit delay |
-| Event | Panel events (armed, disarmed, alarm, trouble…) for automations |
-| Update | Signed OTA release and installation status; authorize installation on the panel |
+| Feature | What it provides |
+| --- | --- |
+| Alarm controls | One alarm entity per partition, with Home (Stay), Away and Night arming |
+| Zones | Named zone sensors, plus tamper, low-battery and supervision diagnostics |
+| Panel health | Trouble, AC power and installer-mode sensors; uptime and available Wi-Fi signal |
+| Everyday controls | Chime per partition and a button to restart the exit delay |
+| Events | Arming, disarming, alarms and troubles for dashboards and automations |
+| Firmware updates | Release availability and installation progress; authorize and start installation on the panel |
 
-Each zone is its own device under the panel, so you can assign it to an area and
-see it on your dashboards where it belongs. Zones added or renamed on the panel
-appear in Home Assistant without a restart. Deleted zones and their diagnostic devices are removed.
+Each zone appears as a device under the panel, so you can assign it to a room.
+Added, renamed and deleted zones are reconciled without restarting Home Assistant.
+Zone battery percentages and radio signal readings depend on future sensor telemetry;
+current firmware supplies low-battery and supervision flags.
 
-**Optional (two-way):** an options flow chooses which Home Assistant entities the
-panel may use as alarm zones and which devices (lights, locks, climate, covers) it
-may show on its own Devices screen. The panel only ever sees what you allow.
+## Install the integration
 
-## Requirements
+You need Home Assistant **2026.3 or newer**, compatible RoboAlarms development
+firmware, and a network connection between the two. Automatic discovery uses mDNS;
+manual setup by address is available when discovery cannot cross your network.
 
-- Home Assistant **2026.3 or newer**
-- A RoboAlarms Panel on the same network (mDNS discovery needs the same subnet,
-  or an mDNS reflector across VLANs)
-- The integration enabled on the panel: *Settings > Integrations > Home Assistant*
+### With HACS
 
-## Installation
+[![Open RoboAlarms in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=RoboAlarms&repository=ha-addon&category=integration)
 
-### HACS (recommended)
+Or add the [custom repository](https://www.hacs.xyz/docs/faq/custom_repositories/) yourself:
 
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=RoboAlarms&repository=ha-addon&category=integration)
+1. In HACS, open the three-dot menu and choose **Custom repositories**.
+2. Add `https://github.com/RoboAlarms/ha-addon` with type **Integration**.
+3. Find **RoboAlarms**, download the integration, and restart Home Assistant.
 
-Or by hand: **HACS > ⋮ > Custom repositories**, add
-`https://github.com/RoboAlarms/ha-addon` with type *Integration*, then search for
-**RoboAlarms**, download it and restart Home Assistant.
-
-### Manual
+### Manually
 
 Copy `custom_components/roboalarms` into the `custom_components` folder of your
-Home Assistant configuration directory and restart Home Assistant.
+Home Assistant configuration directory, then restart Home Assistant.
 
-## Setup
+## Pair your panel
 
-[![Open your Home Assistant instance and start setting up a new integration.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=roboalarms)
+[![Set up the RoboAlarms integration](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=roboalarms)
 
-1. The panel appears under **Settings > Devices & services > Discovered** — click
-   **Add**. (No discovery? *Add integration*, search for **RoboAlarms** and enter
-   the panel's address; it's shown on the panel under *Settings > Integrations*.)
-2. On the panel, open *Settings > Integrations > Home Assistant* and tap **Pair**
-   (the panel asks for your master or installer code; pairing stays open for two
-   minutes).
-3. Both screens show a 6-digit code. If they match, tap **Allow** on the panel.
-4. Done — the panel and its zones appear as devices.
+1. On the panel, open **Settings > Integrations**, unlock with your master or installer
+   code if prompted, then open **Home Assistant** and enable the integration.
+2. In Home Assistant, open **Settings > Devices & services** and add the discovered
+   **RoboAlarms Panel**. If it is not discovered, choose **Add integration**, search
+   for **RoboAlarms**, and enter the address shown under **Settings > Network** on the panel.
+3. When Home Assistant prompts you, tap **Pair with Home Assistant** on the panel.
+   Pairing stays open for two minutes.
+4. Compare the six-digit code on both screens. If they match, tap
+   **The codes match - allow** on the panel. Reject the request if they differ.
+5. The panel and its zones appear in Home Assistant, ready to assign to areas.
 
-If the panel is ever factory-reset, Home Assistant raises a repair issue asking you
-to pair again. Moving the panel to a new address is picked up automatically from
-discovery, or via *Reconfigure* on the integration entry.
+The [illustrated setup guide](https://docs.roboalarms.com/installer/home-assistant/)
+walks through installation, pairing and connection checks.
 
-## The MQTT alternative
+## Share Home Assistant entities with the panel
 
-The panel also speaks plain MQTT with Home Assistant discovery, for setups with
-their own broker (or Node-RED and friends). This integration is the recommended
-path — it needs no broker, pairs on the panel and carries the two-way features —
-but the MQTT path remains supported by the panel firmware.
+The integration's options let you choose which binary sensors the panel may use as
+alarm zones and which entities it may control. Both lists start empty; only the
+entities you select are offered to the panel.
+
+This two-way work is still in development:
+
+- **Home Assistant sensors as zones:** implemented in software; panel hardware
+  acceptance testing is still pending.
+- **Device control:** the integration's allowed-entity checks and action handling
+  are implemented. The panel's Devices screen for lights, locks, climate and other
+  controls is not yet available.
+
+See the [sensor-sharing guide](https://docs.roboalarms.com/installer/home-assistant-zones/)
+for the current setup flow and limitations.
+
+## Alarm actions and connection recovery
+
+Arming and disarming require an authorized panel user code. The panel checks it and
+enforces its permissions and keypad lockout rules. Duress remains silent in the
+visible alarm state.
+
+**Developer Tools > Actions** also exposes `roboalarms.bypass_zone`,
+`roboalarms.unbypass_zone`, `roboalarms.arm` (including silent-exit and
+no-entry-delay options), and `roboalarms.panic`. The panel decides whether each
+request is allowed. Remote panic is currently disabled by firmware policy.
+
+Use **Reconfigure** on the integration entry to change its address or port while
+preserving pairing, entities and options. A changed panel identity or certificate
+requires pairing again. Incompatible protocol versions create a repair issue;
+update to a matching integration and firmware combination.
 
 ## Troubleshooting
 
-- **Not discovered** — discovery relies on mDNS: the panel and Home Assistant must
-  be on the same subnet, or your network needs an mDNS reflector (e.g. avahi).
-  Adding the panel by its address works regardless.
-- **"Could not reach the panel"** — check that the integration is enabled on the
-  panel (*Settings > Integrations > Home Assistant*) and that nothing between the
-  two blocks TCP port 6054.
-- **Pairing code mismatch** — the codes differ only when something on the network
-  is interfering with the connection. Don't accept a mismatch; try again on a
-  trusted network.
+| Problem | What to check |
+| --- | --- |
+| Panel not discovered | mDNS normally needs the same subnet, or an mDNS reflector between subnets. Try manual setup by address; the network must still allow the connection. |
+| Could not reach the panel | Enable Home Assistant integration on the panel and check that your network allows TCP port **6054** between the devices. |
+| Pairing timed out | Open pairing on the panel again, then restart the pairing step in Home Assistant. |
+| Pairing codes differ | Reject the request. Check that you are connecting to the intended panel on a trusted network, then try again. |
+| Pairing required again | A factory reset or unpairing removes the previous trust. Follow the reauthentication prompt and compare the new codes. |
 
-## Development status
+For more help, read the [troubleshooting guide](https://docs.roboalarms.com/reference/troubleshooting/)
+or [open an issue](https://github.com/RoboAlarms/ha-addon/issues). Include versions and
+relevant error messages; leave out alarm codes, private keys and personal network details.
 
-| Milestone | Scope | Status |
-|---|---|---|
-| Panel local API | TLS server, pairing, state, events, commands in the panel firmware | Implemented, including bounded transport and durable pairing |
-| Protocol client | `aioroboalarms` (inside this integration until it moves to PyPI) | Implemented; standalone wheel available, PyPI publication pending |
-| This integration | Config flow, entities, diagnostics, repairs | Implemented: entities, actions, reauth, reconfigure, diagnostics and compatibility repairs |
-| Two-way | HA entities as panel zones, panel device control | Both directions built here: shared entities become panel zones, and the panel's device actions run against your allow-list; the panel's Devices screen itself is being built in the firmware |
+## Development and contributions
 
-## Contributing
+The [v0.1.0 testing release](https://github.com/RoboAlarms/ha-addon/releases/tag/v0.1.0)
+includes discovery, pairing, entities, alarm actions, diagnostics, reconfiguration
+and repairs. Pairing, reconnect and status have been verified with development
+hardware and Home Assistant. Broader hardware acceptance testing is ongoing.
 
-Issues and pull requests are welcome. Run the checks locally before opening one
-(Python 3.14, the version Home Assistant itself runs on):
+Issues, testing feedback and pull requests are welcome. For development, use
+Python **3.14.2 or newer** with Home Assistant's matching test dependencies:
 
 ```bash
 pip install -r requirements_test.txt ruff
+python scripts/sync_protocol.py --check
 pytest
 ruff check .
+ruff format --check .
 ```
+
+Run Home Assistant tests in Linux or Docker; Home Assistant's dependencies do not
+install directly on native Windows. The [standalone protocol client](protocol/README.md)
+has its own packaging notes. PyPI publication and HACS default-store inclusion
+remain separate from this custom-repository testing release.
 
 ## License
 
-[Apache-2.0](LICENSE)
-
-
-## Alarm actions and recovery
-
-Developer Tools > Actions includes `roboalarms.bypass_zone`, `roboalarms.unbypass_zone`,
-`roboalarms.arm` (with silent exit and no-entry-delay flags), and `roboalarms.panic`.
-Select the panel config entry and partition and supply a user code. The panel decides
-whether the action is allowed; remote panic is currently disabled in panel firmware
-and returns a refusal. Codes are sent for that action only, never stored by this integration.
-
-Use the integration entry's **Reconfigure** menu to change host or port without losing
-pairing, entity identities or options. The new address must present the same pinned
-certificate and panel identity. After unpairing or a factory reset, use the reauthentication
-flow and compare the new code on both screens. Incompatible protocol versions create a
-repair issue that clears when a compatible connection succeeds.
-
-Zone battery percentage and radio signal entities depend on future source telemetry;
-the current firmware reports low-battery and supervision flags instead. The update entity
-reports availability and progress but does not bypass the panel's installation authorization.
+[Apache 2.0](LICENSE). No RoboAlarms subscription is required. Hardware and optional
+third-party services are provided separately.
