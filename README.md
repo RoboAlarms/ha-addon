@@ -90,7 +90,7 @@ Home Assistant configuration directory, then restart Home Assistant.
 1. On the panel, open **Settings > Integrations**, unlock with your master or installer
    code if prompted, then open **Home Assistant** and enable the integration.
 2. In Home Assistant, open **Settings > Devices & services** and add the discovered
-   **RoboAlarms Panel**. If it is not discovered, choose **Add integration**, search
+   **RoboAlarms**. If it is not discovered, choose **Add integration**, search
    for **RoboAlarms**, and enter the address shown under **Settings > Network** on the panel.
 3. When Home Assistant prompts you, tap **Pair with Home Assistant** on the panel.
    Pairing stays open for two minutes.

@@ -377,7 +377,7 @@ class RoboAlarmsConfigFlow(ConfigFlow, domain=DOMAIN):
         }
         if self.source == config_entries.SOURCE_REAUTH:
             return self.async_update_reload_and_abort(self._get_reauth_entry(), data_updates=data)
-        return self.async_create_entry(title=self._name or "RoboAlarms Panel", data=data)
+        return self.async_create_entry(title=self._name or "RoboAlarms", data=data)
 
     async def async_step_pair_failed(
         self, user_input: dict[str, Any] | None = None

@@ -68,6 +68,17 @@ approved committing and pushing to `origin/main` on 2026-09-24; check Git histor
 tracking for delivery state. No release, live Home Assistant update or hardware test is part
 of that request. Existing unrelated edits preserved.
 
+**Home Assistant display name (Codex, 2026-09-24): complete, checks passed.** The user requested the
+integration picker name change from "RoboAlarms Panel" to "RoboAlarms", matching the website's
+Home Assistant screenshot. Updated `manifest.json`, the setup README, and generic config-entry/
+device-name fallbacks; the domain, entity ids, service names and protocol identifiers are
+unchanged. The disposable screenshot lab loaded this edited integration. CUA verified the
+picker and configured integration page display "RoboAlarms"; the lab-only pairing was recovered
+against its fictional panel. Replaced the website asset with a genuine Home Assistant frontend
+capture showing the four fictional devices and 22 entities; no text was repainted. The capture
+is 976×600 PNG, cropped from the 1280×720 CUA capture. All 145 tests, Ruff lint/format checks,
+translation parity and `git diff --check` passed. No release, commit or push was requested.
+
 Validation: existing offline Docker image (`roboalarms-test`, Python 3.14.7) passed protocol
 source synchronization, all 145 pytest tests, Ruff lint and formatting (29 files). README local
 links pass; `git diff --check` passes. Visually inspected the exported icon; PNG checks confirm

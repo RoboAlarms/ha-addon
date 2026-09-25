@@ -1,6 +1,6 @@
 {
   "domain": "roboalarms",
-  "name": "RoboAlarms Panel",
+  "name": "RoboAlarms",
   "codeowners": ["@RoboAlarms"],
   "config_flow": true,
   "documentation": "https://github.com/RoboAlarms/ha-addon",

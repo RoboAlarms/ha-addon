@@ -26,7 +26,7 @@ class RoboAlarmsEntity(CoordinatorEntity[RoboAlarmsCoordinator]):
         self.panel_id = info.panel_id
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, info.panel_id)},
-            name=info.name or "RoboAlarms Panel",
+            name=info.name or "RoboAlarms",
             manufacturer="RoboAlarms",
             model=info.model or None,
             sw_version=info.fw or None,
