@@ -53,7 +53,36 @@ entities, commands) and **M13** (two-way: HA entities as panel zones, panel devi
 | `.github/workflows/` | `validate.yml` (hassfest + HACS action), `tests.yml` (pytest + ruff) |
 | `hacs.json` | HACS metadata; `homeassistant` is the minimum HA version (2026.3.0, needed for the in-repo brand icon) |
 
-## Where things stand (2026-09-24)
+## Where things stand (2026-09-29)
+
+**Z-Wave devices, a CO fix and Spanish (Claude, 2026-09-29): checks passed; committed and pushed
+with this note.** Panel repo BL-043, BL-027 and BL-005:
+- **The panel's own Z-Wave outputs** over the native link (protocol.md, API 1 addition):
+  `aiopanel.py` `ZwaveDevice` + `PanelState.apply_zwave` (the whole list each time, validated
+  whole, unknown kinds left out; `protocol/aioroboalarms.py` synced), the coordinator handles
+  `zwave_devices`/`zwave_result` and sends `zwave_set` (`async_zwave_set`, shared
+  `_async_request`), new platforms `light` (dimmer, brightness <-> level, back to the last level)
+  and `cover` (garage, CLOSE only - opening takes a code at the panel), `switch` gains the
+  panel's switches/relays. Each is its own device under the panel; missing or offline =
+  unavailable, never removed by itself (the panel lists nothing while its radio starts);
+  `async_remove_config_entry_device` lets a person delete one the panel no longer lists.
+  `tests/test_zwave.py` (incl. the firmware's golden `zwave_devices` string). Because the light
+  platform now always loads, `tests/test_init.py` has an autouse `light_integration_first`
+  fixture (also imported by `test_coordinator.py`) so service mocks aren't replaced.
+- **CO zones**: the panel sends device class `carbon_monoxide`; it now maps to
+  `BinarySensorDeviceClass.CO` (was only `co`). Found on the bench panel during BL-027 part 1
+  (panel repo docs/features/23 validation.md), verified live.
+- **Spanish** `translations/es.json` (a machine draft for native review; the flag is this note
+  and panel Features/37) and `tests/test_translations.py` (keys/placeholders parity, en.json ==
+  strings.json).
+- Checks: 160 tests in the `roboalarms-test` Docker image, Ruff lint and format clean, protocol
+  sync check OK. Not run: hassfest/HACS action (CI runs them on push). Not released (version
+  still 0.1.0); not on a panel with a Z-Wave radio.
+- Known: Home Assistant 2026.8 replaced DeviceInfo `via_device` with `via_device_id` (old form
+  stops in 2027.8); zones and Z-Wave devices still use `via_device` since the minimum is 2026.3
+  - panel repo BL-111.
+
+## Earlier status (2026-09-24)
 
 **Brand and README refresh (Codex): complete, checks passed; included in this source revision.** Owner requested
 the existing R/house logo from the docs/main website, removal of the README panel screenshot

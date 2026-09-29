@@ -19,6 +19,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry, async_mock_service
 
 from custom_components.roboalarms import aiopanel
@@ -33,6 +34,15 @@ from custom_components.roboalarms.const import (
 from custom_components.roboalarms.coordinator import WrongPanel
 
 pytestmark = pytest.mark.usefixtures("socket_enabled")
+
+
+@pytest.fixture(autouse=True)
+async def light_integration_first(hass: HomeAssistant) -> None:
+    """The integration forwards a light platform (the panel's Z-Wave dimmers). Set Home
+    Assistant's light integration up before a test mocks light services, or that forward
+    would register the real services over the mock."""
+    assert await async_setup_component(hass, "light", {})
+
 
 PANEL_HELLO = {
     "t": "hello",
@@ -98,6 +108,11 @@ class StatePanel:
         self.received: list[dict[str, Any]] = []
         self.watch: list[str] = []
         self.command_result = "ok"
+        # the panel's own Z-Wave outputs: sent after the snapshot when set; each zwave_set is
+        # kept and answered ok, or refused with zwave_error
+        self.zwave: list[dict[str, Any]] | None = None
+        self.zwave_sets: list[dict[str, Any]] = []
+        self.zwave_error = ""
         self._push: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._writer: asyncio.StreamWriter | None = None
 
@@ -150,6 +165,8 @@ class StatePanel:
             # the firmware's order: the watch list, then the snapshot
             await self._send(writer, {"t": "watch", "ids": list(self.watch)})
             await self._send(writer, SNAPSHOT)
+            if self.zwave is not None:
+                await self._send(writer, {"t": "zwave_devices", "devices": self.zwave})
             read = asyncio.ensure_future(reader.readexactly(4))
             pushed = asyncio.ensure_future(self._push.get())
             while True:
@@ -172,6 +189,17 @@ class StatePanel:
                                 "id": msg.get("id"),
                                 "action": msg.get("action"),
                                 "result": self.command_result,
+                            },
+                        )
+                    elif msg.get("t") == "zwave_set":
+                        self.zwave_sets.append(msg)
+                        await self._send(
+                            writer,
+                            {
+                                "t": "zwave_result",
+                                "id": msg.get("id"),
+                                "ok": not self.zwave_error,
+                                "error": self.zwave_error,
                             },
                         )
                     elif msg.get("t") == "ping":

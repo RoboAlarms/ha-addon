@@ -10,6 +10,7 @@ from __future__ import annotations
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.helpers.device_registry import DeviceEntry
 
 from .aiopanel import CannotConnect, InvalidMessage, UnsupportedVersion
 from .coordinator import RoboAlarmsConfigEntry, RoboAlarmsCoordinator, WrongPanel
@@ -19,7 +20,9 @@ PLATFORMS: list[Platform] = [
     Platform.ALARM_CONTROL_PANEL,
     Platform.BINARY_SENSOR,
     Platform.BUTTON,
+    Platform.COVER,
     Platform.EVENT,
+    Platform.LIGHT,
     Platform.SWITCH,
     Platform.SENSOR,
     Platform.UPDATE,
@@ -56,6 +59,29 @@ async def async_unload_entry(hass: HomeAssistant, entry: RoboAlarmsConfigEntry) 
     if ok:
         await entry.runtime_data.async_shutdown()
     return ok
+
+
+async def async_remove_config_entry_device(
+    hass: HomeAssistant, entry: RoboAlarmsConfigEntry, device: DeviceEntry
+) -> bool:
+    """A person may delete one of the panel's Z-Wave devices the panel no longer lists.
+
+    Those aren't removed by themselves (entity.py, RoboAlarmsZwaveEntity: the list is empty while
+    the panel's radio starts). The panel itself, its zones and a Z-Wave device still listed stay.
+    """
+    from .const import DOMAIN
+    from .entity import zwave_device_identifier
+
+    coordinator = getattr(entry, "runtime_data", None)
+    data = coordinator.data if coordinator is not None else None
+    if coordinator is None or coordinator.info is None or data is None or data.zwave is None:
+        return False
+    listed = {zwave_device_identifier(coordinator.info.panel_id, key) for key in data.zwave}
+    prefix = zwave_device_identifier(coordinator.info.panel_id, "zw_")
+    for domain, identity in device.identifiers:
+        if domain == DOMAIN and identity.startswith(prefix):
+            return identity not in listed
+    return False
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: RoboAlarmsConfigEntry) -> None:

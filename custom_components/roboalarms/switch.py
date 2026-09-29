@@ -25,7 +25,12 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .coordinator import RoboAlarmsConfigEntry, RoboAlarmsCoordinator
-from .entity import RoboAlarmsPartitionEntity, async_add_partition_entities
+from .entity import (
+    RoboAlarmsPartitionEntity,
+    RoboAlarmsZwaveEntity,
+    async_add_partition_entities,
+    async_add_zwave_entities,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -40,9 +45,31 @@ async def async_setup_entry(
     entry: RoboAlarmsConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """One chime switch per partition, including ones the panel adds later (HA09)."""
+    """One chime switch per partition, including ones the panel adds later (HA09), and the
+    panel's Z-Wave switches and relays."""
     coordinator = entry.runtime_data
     async_add_partition_entities(coordinator, entry, async_add_entities, RoboAlarmsChime)
+    async_add_zwave_entities(
+        coordinator, entry, async_add_entities, "switch", RoboAlarmsZwaveSwitch
+    )
+
+
+class RoboAlarmsZwaveSwitch(RoboAlarmsZwaveEntity, SwitchEntity):
+    """A Z-Wave switch or relay the panel runs: on is level 100, off 0 (a switch takes nothing
+    in between). Its state comes back from the panel's list, not from the answer."""
+
+    @property
+    def is_on(self) -> bool | None:
+        device = self._device()
+        if device is None or device.level is None:
+            return None
+        return device.level > 0
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self.coordinator.async_zwave_set(self._key, 100)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self.coordinator.async_zwave_set(self._key, 0)
 
 
 class RoboAlarmsChime(RoboAlarmsPartitionEntity, SwitchEntity):

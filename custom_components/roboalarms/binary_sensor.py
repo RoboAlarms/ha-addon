@@ -33,6 +33,7 @@ _DEVICE_CLASS = {
     "garage_door": BinarySensorDeviceClass.GARAGE_DOOR,
     "motion": BinarySensorDeviceClass.MOTION,
     "smoke": BinarySensorDeviceClass.SMOKE,
+    "carbon_monoxide": BinarySensorDeviceClass.CO,  # the panel's name (alarm_strings.c)
     "co": BinarySensorDeviceClass.CO,
     "gas": BinarySensorDeviceClass.GAS,
     "heat": BinarySensorDeviceClass.HEAT,

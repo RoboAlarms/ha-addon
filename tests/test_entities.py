@@ -131,6 +131,25 @@ async def test_event_entity_accepts_its_own_entry_id(hass: HomeAssistant) -> Non
 # ---- HA08: zone metadata (name, device class) reconciles on new snapshots -------------
 
 
+async def test_carbon_monoxide_zone_is_a_co_sensor(hass: HomeAssistant) -> None:
+    """The panel names a CO detector's class "carbon_monoxide" (its alarm_strings.c); Home
+    Assistant shows it as a CO sensor, not a plain on/off one (found on the bench panel,
+    BL-027)."""
+    async with StatePanel() as panel:
+        await _setup(hass, panel)
+        panel.push(
+            {
+                **SNAPSHOT,
+                "seq": 8,
+                "zones": [{**ZONE, "name": "Hallway CO", "device_class": "carbon_monoxide"}],
+            }
+        )
+        await settle()
+        state = hass.states.get("binary_sensor.front_door")
+        assert state is not None
+        assert state.attributes["device_class"] == "carbon_monoxide"
+
+
 async def test_zone_rename_and_reclassify_updates_live(hass: HomeAssistant) -> None:
     """A snapshot renaming zone 1 and changing its class updates the
     existing device and entity - not just the coordinator (HA08,

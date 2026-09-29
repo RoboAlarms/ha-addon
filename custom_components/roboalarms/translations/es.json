@@ -1,0 +1,126 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "user": {
+        "title": "Conectar con su panel",
+        "description": "Ingrese la dirección del RoboAlarms Panel en su red. La encuentra en el panel, en Configuración > Integraciones > Home Assistant.",
+        "data": {
+          "host": "Host",
+          "port": "Puerto"
+        }
+      },
+      "confirm": {
+        "title": "Se encontró un RoboAlarms Panel",
+        "description": "¿Quiere agregar {name} ({host}) a Home Assistant?\n\nConfirmará la vinculación en la pantalla del panel."
+      },
+      "pair": {
+        "title": "Vincular con el panel",
+        "description": "En el panel, abra Configuración > Integraciones > Home Assistant y toque **Vincular con Home Assistant** (pide el código maestro o de instalador). La vinculación queda abierta dos minutos.\n\nLuego continúe aquí."
+      },
+      "reauth_confirm": {
+        "title": "Vincular con el panel otra vez",
+        "description": "{name} ya no responde con el certificado con el que se vinculó; suele pasar tras un restablecimiento de fábrica. Abra la vinculación en el panel (Configuración > Integraciones > Home Assistant > Vincular) y luego continúe aquí."
+      },
+      "reconfigure": {
+        "title": "Cambiar la dirección del panel",
+        "description": "Ingrese la dirección nueva del mismo panel vinculado. Se conservan la vinculación y las entidades.",
+        "data": {
+          "host": "Host",
+          "port": "Puerto"
+        }
+      }
+    },
+    "progress": {
+      "wait_allow": "Ambas pantallas deben mostrar el mismo código:\n\n# {code}\n\nSi el panel muestra los mismos seis dígitos, toque **Los códigos coinciden - permitir** en él. Si no coinciden, rechácelo ahí."
+    },
+    "error": {
+      "cannot_connect": "No se pudo contactar el panel. Revise que esté encendido, en la misma red, y que la integración de Home Assistant esté activada en el panel (Configuración > Integraciones > Home Assistant).",
+      "unsupported": "El panel usa otra versión del protocolo de enlace. Actualice esta integración y el firmware del panel a sus versiones más recientes.",
+      "not_pairing": "El panel no está vinculando en este momento. Primero abra la vinculación en su pantalla e inténtelo de nuevo.",
+      "pair_again": "El certificado cambió. Vuelva a autenticar la integración y confirme una vinculación nueva en el panel."
+    },
+    "abort": {
+      "already_configured": "Este panel ya está configurado. Se actualizó su dirección.",
+      "unknown": "El dispositivo encontrado no se identificó como un RoboAlarms Panel.",
+      "pair_rejected": "El panel rechazó la vinculación.",
+      "pair_timeout": "La vinculación venció en el panel. Ábrala otra vez e inténtelo de nuevo.",
+      "pair_mismatch": "No se pudo confiar en la vinculación y se detuvo. Inténtelo de nuevo en una red de confianza.",
+      "reauth_successful": "El panel está vinculado otra vez.",
+      "wrong_device": "Esa dirección ahora pertenece a otro panel.",
+      "reconfigure_successful": "Se actualizó la dirección del panel."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Lo que el panel puede ver y hacer",
+        "description": "Elija lo que su panel puede usar. Solo estas entidades se envían al panel: recibe su nombre, área, clase de dispositivo y estado, y nada más de Home Assistant se le ofrece, se le responde ni se ejecuta por él.\n\nEn el panel, una entidad compartida se puede asignar a una zona en Configuración > Zonas, y una controlable aparece en su pantalla Dispositivos.",
+        "data": {
+          "share_entities": "Entidades que el panel puede usar como zonas",
+          "control_entities": "Entidades que el panel puede controlar"
+        },
+        "data_description": {
+          "share_entities": "Si lo deja vacío, el panel no ve nada de Home Assistant.",
+          "control_entities": "Luces, interruptores, cortinas, cerraduras y demás que el panel puede encender, abrir o cerrar desde su pantalla Dispositivos. Abrir una cerradura y abrir una cortina o una válvula siguen pidiendo un código de usuario en el propio panel."
+        }
+      }
+    }
+  },
+  "entity": {
+    "switch": {
+      "chime": {
+        "name": "Timbre{partition}"
+      }
+    },
+    "button": {
+      "exit_restart": {
+        "name": "Reiniciar tiempo de salida{partition}"
+      }
+    },
+    "event": {
+      "panel_event": {
+        "name": "Evento"
+      }
+    },
+    "binary_sensor": {
+      "tamper": {
+        "name": "Sabotaje"
+      },
+      "low_battery": {
+        "name": "Batería baja"
+      },
+      "supervision": {
+        "name": "Supervisión"
+      },
+      "trouble": {
+        "name": "Falla"
+      },
+      "ac_power": {
+        "name": "Corriente eléctrica"
+      },
+      "installer_mode": {
+        "name": "Modo instalador"
+      }
+    },
+    "sensor": {
+      "uptime_s": {
+        "name": "Tiempo en funcionamiento"
+      },
+      "rssi": {
+        "name": "Señal Wi-Fi"
+      }
+    },
+    "update": {
+      "firmware": {
+        "name": "Firmware"
+      }
+    }
+  },
+  "issues": {
+    "unsupported_protocol": {
+      "title": "El protocolo del panel no es compatible",
+      "description": "{name} usa una versión del protocolo que esta integración no entiende. Actualice el firmware del panel y la integración RoboAlarms a versiones compatibles. La conexión se recupera sola cuando coincidan."
+    }
+  }
+}

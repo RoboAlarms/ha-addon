@@ -34,6 +34,12 @@ SEND_QUEUE_MAX = 32  # sends allowed to wait for the transport at the same time
 # but bounded, so a peer cannot grow a PanelState without limit (HA05).
 PARTITION_MAX = 64
 ZONE_MAX = 1024
+# The panel's own Z-Wave outputs (protocol.md, API 1 addition): it lists 16 at most
+# (ha_link.c ZW_DEV_MAX) with keys under 40 characters; held within these bounds.
+ZWAVE_DEVICE_MAX = 64
+ZWAVE_KEY_MAX = 64
+ZWAVE_KINDS = ("switch", "light", "garage")
+_GARAGE_STATES = ("open", "closed", "unknown")
 
 _PAIR_CONTEXT = b"roboalarms-pair-v1"
 _CONNECT_TIMEOUT = 10.0
@@ -222,6 +228,46 @@ class ZoneState:
         )
 
 
+@dataclass(frozen=True)
+class ZwaveDevice:
+    """One of the panel's own Z-Wave outputs: a switch, a dimmer or a garage door.
+
+    level is 0..100, None when the panel doesn't know it yet; state is a garage's sensor
+    word ("open", "closed", "unknown" - a press is never reported as "opening"), "" for the
+    others.
+    """
+
+    key: str
+    kind: str
+    name: str
+    level: int | None
+    online: bool
+    state: str
+
+    @classmethod
+    def from_json(cls, d: dict[str, Any]) -> ZwaveDevice:
+        """One device of a zwave_devices list, or InvalidMessage."""
+        d = _obj(d, "a Z-Wave device")
+        key = _text(d, "key", "a Z-Wave device")
+        if not key or len(key) > ZWAVE_KEY_MAX:
+            raise InvalidMessage("a Z-Wave device has no usable key")
+        what = f"Z-Wave device {key}"
+        level = None
+        if d.get("level") is not None:
+            level = _number(d, "level", what, low=0, high=100, default=0)
+        state = _text(d, "state", what)
+        if state and state not in _GARAGE_STATES:
+            state = "unknown"  # a word this client doesn't know says nothing sure
+        return cls(
+            key=key,
+            kind=_text(d, "kind", what),
+            name=_text(d, "name", what),
+            level=level,
+            online=_flag(d, "online", what),
+            state=state,
+        )
+
+
 @dataclass
 class PanelState:
     """Everything the panel has pushed so far (snapshot, then deltas)."""
@@ -231,6 +277,25 @@ class PanelState:
     partitions: dict[int, PartitionState] | None = None
     zones: dict[int, ZoneState] | None = None
     troubles: dict[str, Any] | None = None
+    # the panel's Z-Wave outputs by key; None until a zwave_devices message (older panels
+    # and panels without Z-Wave never send one)
+    zwave: dict[str, ZwaveDevice] | None = None
+
+    def apply_zwave(self, msg: dict[str, Any]) -> None:
+        """The panel's Z-Wave outputs: the whole list, every time, replacing what is held.
+
+        Validated whole before anything changes, like a snapshot (HA05). A kind this client
+        doesn't know is left out, so a later panel can add kinds without breaking it.
+        """
+        devices = _array(msg, "devices")
+        if len(devices) > ZWAVE_DEVICE_MAX:
+            raise InvalidMessage(f"zwave_devices lists more than {ZWAVE_DEVICE_MAX} devices")
+        listed: dict[str, ZwaveDevice] = {}
+        for d in devices:
+            device = ZwaveDevice.from_json(d)
+            if device.kind in ZWAVE_KINDS:
+                listed[device.key] = device
+        self.zwave = listed
 
     def apply(self, msg: dict[str, Any]) -> None:
         """Fold a snapshot or delta into this state.

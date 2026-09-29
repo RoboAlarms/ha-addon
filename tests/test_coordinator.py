@@ -42,6 +42,7 @@ from test_init import (
     StatePanel,
     _house,
     _setup,
+    light_integration_first,  # noqa: F401 - an autouse fixture: the light services first
 )
 
 from custom_components.roboalarms.const import (

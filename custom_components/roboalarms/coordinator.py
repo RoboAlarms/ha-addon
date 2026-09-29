@@ -400,6 +400,10 @@ class RoboAlarmsCoordinator(DataUpdateCoordinator[PanelState]):
         if t == "status":
             state.apply_status(msg)
             return state.ready
+        if t == "zwave_devices":
+            # the panel's own Z-Wave outputs, the whole list each time (protocol.md)
+            state.apply_zwave(msg)
+            return state.ready
         if t == "event":
             # Which panel this came from is this coordinator's own entry, never
             # a field off the wire: one panel's alarm must not reach another
@@ -408,7 +412,7 @@ class RoboAlarmsCoordinator(DataUpdateCoordinator[PanelState]):
             self.hass.bus.async_fire(
                 f"{DOMAIN}_event", {**msg, "entry_id": self.config_entry.entry_id}
             )
-        elif t == "result":
+        elif t in ("result", "zwave_result"):
             fut = self._pending.pop(str(msg.get("id") or ""), None)
             if fut is not None and not fut.done():
                 fut.set_result(msg)
@@ -771,31 +775,43 @@ class RoboAlarmsCoordinator(DataUpdateCoordinator[PanelState]):
 
     # ---- commands (HAI-007) ---------------------------------------------------------
 
-    async def async_command(self, action: str, **fields: Any) -> dict[str, Any]:
-        """Send a command and wait for the panel's answer to it."""
+    async def _async_request(self, msg: dict[str, Any]) -> dict[str, Any]:
+        """Send a message with a fresh id and wait for the panel's answer to that id."""
         client = self._client
         if client is None:
             raise HomeAssistantError("The panel is not connected")
-        cmd_id = uuid4().hex[:8]
+        req_id = uuid4().hex[:8]
         fut: asyncio.Future[dict[str, Any]] = self.hass.loop.create_future()
-        self._pending[cmd_id] = fut
+        self._pending[req_id] = fut
         try:
             # The send is inside the deadline, not before it: a panel that
             # stopped reading must not hold a command open past it (HA11).
             async with asyncio.timeout(_COMMAND_TIMEOUT_S):
-                await client.send(
-                    {"t": "command", "id": cmd_id, "action": action, **fields},
-                    timeout=_COMMAND_TIMEOUT_S,
-                )
-                result = await fut
+                await client.send({**msg, "id": req_id}, timeout=_COMMAND_TIMEOUT_S)
+                return await fut
         except CannotConnect as err:
             await self._async_link_failed(err)
             raise HomeAssistantError("The panel did not answer the command") from err
         except (TimeoutError, LinkError) as err:
             raise HomeAssistantError("The panel did not answer the command") from err
         finally:
-            self._pending.pop(cmd_id, None)
+            self._pending.pop(req_id, None)
+
+    async def async_command(self, action: str, **fields: Any) -> dict[str, Any]:
+        """Send a command and wait for the panel's answer to it."""
+        result = await self._async_request({"t": "command", "action": action, **fields})
         verdict = str(result.get("result") or "")
         if verdict != "ok":
             raise HomeAssistantError(f"The panel refused it: {verdict.replace('_', ' ')}")
         return result
+
+    async def async_zwave_set(self, key: str, level: int) -> None:
+        """Set one of the panel's Z-Wave outputs: 0..100, a switch 0 or 100, a garage 0 (close).
+
+        The panel checks everything again - a garage never opens from here, an in-between level
+        on a switch is refused - and answers not_allowed or not_taken (protocol.md).
+        """
+        result = await self._async_request({"t": "zwave_set", "key": key, "level": int(level)})
+        if result.get("ok") is not True:
+            error = str(result.get("error") or "not_taken")
+            raise HomeAssistantError(f"The panel refused it: {error.replace('_', ' ')}")

@@ -54,10 +54,13 @@ Home Assistant still depend on that server and the network connection.
 | Zones | Named zone sensors, plus tamper, low-battery and supervision diagnostics |
 | Panel health | Trouble, AC power and installer-mode sensors; uptime and available Wi-Fi signal |
 | Everyday controls | Chime per partition and a button to restart the exit delay |
+| Z-Wave devices | The panel's own Z-Wave switches, dimmers and garage doors: switches, lights with brightness, and garage doors that close from Home Assistant and open only at the panel |
 | Events | Arming, disarming, alarms and troubles for dashboards and automations |
 | Firmware updates | Release availability and installation progress; authorize and start installation on the panel |
 
-Each zone appears as a device under the panel, so you can assign it to a room.
+Each zone and each of the panel's Z-Wave devices appears as a device under the panel, so
+you can assign it to a room. A Z-Wave device the panel no longer lists shows as
+unavailable and can be deleted from its device page.
 Added, renamed and deleted zones are reconciled without restarting Home Assistant.
 Zone battery percentages and radio signal readings depend on future sensor telemetry;
 current firmware supplies low-battery and supervision flags.
