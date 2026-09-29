@@ -10,10 +10,12 @@ from __future__ import annotations
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceEntry
 
 from .aiopanel import CannotConnect, InvalidMessage, UnsupportedVersion
 from .coordinator import RoboAlarmsConfigEntry, RoboAlarmsCoordinator, WrongPanel
+from .entity import panel_device_info
 from .services import async_register_services
 
 PLATFORMS: list[Platform] = [
@@ -49,6 +51,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: RoboAlarmsConfigEntry) -
     except (CannotConnect, InvalidMessage, UnsupportedVersion, TimeoutError) as err:
         raise ConfigEntryNotReady(str(err)) from err
     entry.runtime_data = coordinator
+    # The panel's device first: its zones and Z-Wave outputs name it as their parent by its
+    # registry id (entity.parent_of).
+    assert coordinator.info is not None
+    coordinator.panel_device_id = (
+        dr.async_get(hass)
+        .async_get_or_create(config_entry_id=entry.entry_id, **panel_device_info(coordinator.info))
+        .id
+    )
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 

@@ -175,6 +175,7 @@ class RoboAlarmsCoordinator(DataUpdateCoordinator[PanelState]):
     def __init__(self, hass: HomeAssistant, entry: RoboAlarmsConfigEntry) -> None:
         super().__init__(hass, _LOGGER, config_entry=entry, name=f"{DOMAIN} {entry.title}")
         self.info: PanelInfo | None = None
+        self.panel_device_id: str | None = None  # the panel's device (entity.parent_of)
         self._client: PanelClient | None = None
         self._ssl = None
         self._task: asyncio.Task | None = None

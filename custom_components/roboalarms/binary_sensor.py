@@ -25,7 +25,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from .aiopanel import ZoneState
 from .const import DOMAIN
 from .coordinator import RoboAlarmsConfigEntry, RoboAlarmsCoordinator
-from .entity import RoboAlarmsEntity
+from .entity import RoboAlarmsEntity, parent_of
 
 _DEVICE_CLASS = {
     "door": BinarySensorDeviceClass.DOOR,
@@ -115,7 +115,7 @@ class RoboAlarmsZone(RoboAlarmsEntity, BinarySensorEntity):
             name=self._device_name,
             manufacturer="RoboAlarms",
             model="Zone",
-            via_device=(DOMAIN, self.panel_id),
+            **parent_of(coordinator),
         )
 
     def _state(self) -> ZoneState | None:

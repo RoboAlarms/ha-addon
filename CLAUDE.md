@@ -78,9 +78,13 @@ with this note.** Panel repo BL-043, BL-027 and BL-005:
 - Checks: 160 tests in the `roboalarms-test` Docker image, Ruff lint and format clean, protocol
   sync check OK. Not run: hassfest/HACS action (CI runs them on push). Not released (version
   still 0.1.0); not on a panel with a Z-Wave radio.
-- Known: Home Assistant 2026.8 replaced DeviceInfo `via_device` with `via_device_id` (old form
-  stops in 2027.8); zones and Z-Wave devices still use `via_device` since the minimum is 2026.3
-  - panel repo BL-111.
+- **`via_device_id` (panel repo BL-111, 2026-09-29, later the same day):** Home Assistant
+  2026.8 replaced DeviceInfo `via_device` with `via_device_id` (the old form warns on every
+  start and stops in 2027.8). `entity.parent_of()` gives `via_device_id` when DeviceInfo has
+  that key and `via_device` before, so the minimum stays 2026.3; `__init__.py` registers the
+  panel's device (`entity.panel_device_info`) before the platforms and keeps its id in
+  `coordinator.panel_device_id`. Tests: `test_entities.py` both forms, with Home Assistant's
+  `report_usage` patched (no report on the new form). 162 tests, Ruff clean.
 
 ## Earlier status (2026-09-24)
 

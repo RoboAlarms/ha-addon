@@ -216,6 +216,55 @@ async def test_zone_rename_preserves_user_name_and_area(hass: HomeAssistant) -> 
         await hass.config_entries.async_unload(entry.entry_id)
 
 
+# ---- a device's parent: by its registry id from Home Assistant 2026.8 (BL-111) ----------
+
+
+def _zone_and_panel_devices(hass: HomeAssistant, entry) -> tuple[dr.DeviceEntry, dr.DeviceEntry]:
+    devices = dr.async_get(hass)
+    zone = er.async_get(hass).async_get("binary_sensor.front_door")
+    assert zone is not None and zone.device_id is not None
+    panel_device = next(
+        d
+        for d in dr.async_entries_for_config_entry(devices, entry.entry_id)
+        if (DOMAIN, "0a1b2c") in d.identifiers
+    )
+    zone_device = devices.async_get(zone.device_id)
+    assert zone_device is not None
+    return zone_device, panel_device
+
+
+def _via_device_reports(report) -> list[str]:
+    return [str(c.args[0]) for c in report.call_args_list if "via_device" in str(c.args[0])]
+
+
+async def test_zone_device_names_the_panel_by_its_id(hass: HomeAssistant) -> None:
+    """A zone's device sits under the panel's through `via_device_id`, the panel's registry id,
+    so Home Assistant has no deprecated `via_device` to report (it stops working in 2027.8)."""
+    with patch("homeassistant.helpers.device_registry.report_usage") as report:
+        async with StatePanel() as panel:
+            entry = await _setup(hass, panel)
+            zone_device, panel_device = _zone_and_panel_devices(hass, entry)
+            assert entry.runtime_data.panel_device_id == panel_device.id
+            assert zone_device.via_device_id == panel_device.id
+            assert _via_device_reports(report) == []
+            await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_older_home_assistant_gets_the_identifier_form(hass: HomeAssistant) -> None:
+    """Before 2026.8 DeviceInfo knows only `via_device` (the panel's identifier): the zone ends
+    up under the same device that way (hacs.json still allows 2026.3)."""
+    with (
+        patch("custom_components.roboalarms.entity._HAS_VIA_DEVICE_ID", False),
+        patch("homeassistant.helpers.device_registry.report_usage") as report,
+    ):
+        async with StatePanel() as panel:
+            entry = await _setup(hass, panel)
+            zone_device, panel_device = _zone_and_panel_devices(hass, entry)
+            assert zone_device.via_device_id == panel_device.id
+            assert _via_device_reports(report)  # this Home Assistant took the old form
+            await hass.config_entries.async_unload(entry.entry_id)
+
+
 # ---- HA09: a partition added after the first snapshot gets its controls too -----------
 
 

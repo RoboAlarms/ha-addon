@@ -5,15 +5,46 @@ addition)."""
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Any
 
 from homeassistant.core import callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .aiopanel import ZwaveDevice
+from .aiopanel import PanelInfo, ZwaveDevice
 from .const import DOMAIN
 from .coordinator import RoboAlarmsConfigEntry, RoboAlarmsCoordinator
+
+# Home Assistant 2026.8 names a device's parent by its registry id, `via_device_id`, and stops
+# honouring the identifier form, `via_device`, in 2027.8 (with a warning on every start until
+# then); the versions before 2026.8 this integration still supports (hacs.json) know only the
+# identifier form.
+_HAS_VIA_DEVICE_ID = "via_device_id" in (
+    DeviceInfo.__required_keys__ | DeviceInfo.__optional_keys__
+)
+
+
+def panel_device_info(info: PanelInfo) -> DeviceInfo:
+    """The panel's own device."""
+    return DeviceInfo(
+        identifiers={(DOMAIN, info.panel_id)},
+        name=info.name or "RoboAlarms",
+        manufacturer="RoboAlarms",
+        model=info.model or None,
+        sw_version=info.fw or None,
+    )
+
+
+def parent_of(coordinator: RoboAlarmsCoordinator) -> dict[str, Any]:
+    """The DeviceInfo key that puts a zone's or a Z-Wave output's device under the panel's.
+
+    __init__.py registers the panel's device before the platforms load, so its id is known.
+    """
+    if _HAS_VIA_DEVICE_ID and coordinator.panel_device_id is not None:
+        return {"via_device_id": coordinator.panel_device_id}
+    assert coordinator.info is not None
+    return {"via_device": (DOMAIN, coordinator.info.panel_id)}
 
 
 class RoboAlarmsEntity(CoordinatorEntity[RoboAlarmsCoordinator]):
@@ -26,13 +57,7 @@ class RoboAlarmsEntity(CoordinatorEntity[RoboAlarmsCoordinator]):
         info = coordinator.info
         assert info is not None
         self.panel_id = info.panel_id
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, info.panel_id)},
-            name=info.name or "RoboAlarms",
-            manufacturer="RoboAlarms",
-            model=info.model or None,
-            sw_version=info.fw or None,
-        )
+        self._attr_device_info = panel_device_info(info)
 
 
 class RoboAlarmsPartitionEntity(RoboAlarmsEntity):
@@ -123,7 +148,7 @@ class RoboAlarmsZwaveEntity(RoboAlarmsEntity):
             model={"switch": "Z-Wave switch", "light": "Z-Wave dimmer"}.get(
                 device.kind, "Z-Wave garage door"
             ),
-            via_device=(DOMAIN, self.panel_id),
+            **parent_of(coordinator),
         )
 
     def _device(self) -> ZwaveDevice | None:
