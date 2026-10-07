@@ -110,13 +110,16 @@ The integration's options let you choose which binary sensors the panel may use 
 alarm zones and which entities it may control. Both lists start empty; only the
 entities you select are offered to the panel.
 
-This two-way work is still in development:
+This two-way work is still in testing:
 
-- **Home Assistant sensors as zones:** implemented in software; panel hardware
-  acceptance testing is still pending.
-- **Device control:** the integration's allowed-entity checks and action handling
-  are implemented. The panel's Devices screen for lights, locks, climate and other
-  controls is not yet available.
+- **Home Assistant sensors as zones:** implemented and tried on a development panel;
+  acceptance testing is still under way.
+- **Device control:** panel firmware with the **Smart Home** screen shows and controls
+  the entities you allow - lights, switches, fans, covers, valves, locks, thermostats,
+  scenes and scripts - and the integration runs only the actions allowed for each kind
+  (a valve opens and closes). It also sends each device's brightness, position, speed,
+  temperatures, modes and optional abilities. Older panel firmware (0.6.x) has no
+  Smart Home screen and ignores these newer details; everything else works as before.
 
 See the [sensor-sharing guide](https://docs.roboalarms.com/installer/home-assistant-zones/)
 for the current setup flow and limitations.
@@ -153,10 +156,14 @@ relevant error messages; leave out alarm codes, private keys and personal networ
 
 ## Development and contributions
 
-The [v0.1.0 testing release](https://github.com/RoboAlarms/ha-addon/releases/tag/v0.1.0)
+The [v0.2.0 testing release](https://github.com/RoboAlarms/ha-addon/releases/tag/v0.2.0)
 includes discovery, pairing, entities, alarm actions, diagnostics, reconfiguration
-and repairs. Pairing, reconnect and status have been verified with development
-hardware and Home Assistant. Broader hardware acceptance testing is ongoing.
+and repairs, as v0.1.0 did. It keeps a quiet panel's connection up, adds the panel's
+own Z-Wave switches, dimmers and garage doors, and sends device details that newer
+panel firmware uses. Pairing, reconnect, status and device control have been tried
+with development hardware and Home Assistant. Broader hardware acceptance testing is
+ongoing; Z-Wave devices have not yet been tried on a panel with a Z-Wave radio, and the
+Spanish translation is a draft awaiting native review.
 
 Issues, testing feedback and pull requests are welcome. For development, use
 Python **3.14.2 or newer** with Home Assistant's matching test dependencies:

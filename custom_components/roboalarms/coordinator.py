@@ -42,7 +42,6 @@ from homeassistant.components.climate import ATTR_HVAC_ACTION
 from homeassistant.components.cover import CoverEntityFeature
 from homeassistant.components.fan import FanEntityFeature
 from homeassistant.components.light import ATTR_SUPPORTED_COLOR_MODES, brightness_supported
-from homeassistant.components.valve import ValveEntityFeature
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     ATTR_SUPPORTED_FEATURES,
@@ -237,7 +236,8 @@ def _supports(state: State) -> list[str] | None:
     protocol.md's words, or None when Home Assistant doesn't say (or for a
     domain that has nothing optional): the panel then offers everything its
     kind has, as it did before this key existed. A list, even empty, is the
-    whole list - what it leaves out the panel doesn't offer."""
+    whole list - what it leaves out the panel doesn't offer. A valve's is
+    always empty: the panel may only open and close one (BL-173)."""
     attrs = state.attributes
     domain = state.domain
     if domain == "light":
@@ -246,18 +246,22 @@ def _supports(state: State) -> list[str] | None:
             return None
         modes = [mode for mode in modes if isinstance(mode, str)]
         return ["brightness"] if brightness_supported(modes) else []
-    if domain not in ("fan", "cover", "valve"):
+    if domain == "valve":
+        # The panel may only open and close a valve (_CALLS has no stop or
+        # set_position for it), so it never offers more, whatever the valve
+        # says or doesn't: an explicit empty list, even while unavailable.
+        return []
+    if domain not in ("fan", "cover"):
         return None
     features = attrs.get(ATTR_SUPPORTED_FEATURES)
     if isinstance(features, bool) or not isinstance(features, int):
         return None
     if domain == "fan":
         return ["set_percentage"] if features & FanEntityFeature.SET_SPEED else []
-    flags = CoverEntityFeature if domain == "cover" else ValveEntityFeature
     out: list[str] = []
-    if features & flags.STOP:
+    if features & CoverEntityFeature.STOP:
         out.append("stop")
-    if features & flags.SET_POSITION:
+    if features & CoverEntityFeature.SET_POSITION:
         out.append("set_position")
     return out
 

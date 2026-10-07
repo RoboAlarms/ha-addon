@@ -11,8 +11,10 @@ import voluptuous as vol
 from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from pytest_homeassistant_custom_component.common import async_mock_service
 from test_init import (  # noqa: F401 - the fixture is used by name
     StatePanel,
+    _call,
     _setup,
     light_integration_first,
 )
@@ -418,13 +420,13 @@ def _by_id(messages: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
 
 
 async def test_supports_from_home_assistants_flags(hass: HomeAssistant) -> None:
-    """HCTL-002, HCTL-004: what a cover, a valve, a fan or a light can do beyond its
-    domain's own actions goes out as "supports", on the catalog row and the state;
-    an empty list says it can do none of them."""
+    """HCTL-002, HCTL-004: what a cover, a fan or a light can do beyond its domain's
+    own actions goes out as "supports", on the catalog row and the state; an empty
+    list says it can do none of them. A valve's is empty whatever it can do."""
     entities = {
         COVER: ("closed", {"supported_features": 12}),  # STOP | SET_POSITION
         "cover.gate": ("closed", {"supported_features": 3}),  # OPEN | CLOSE
-        VALVE: ("open", {"supported_features": 8}),  # STOP
+        VALVE: ("open", {"supported_features": 15}),  # OPEN, CLOSE, SET_POSITION, STOP
         FAN: (STATE_ON, {"supported_features": 1}),  # SET_SPEED
         "fan.attic": (STATE_ON, {"supported_features": 8 | 16 | 32}),  # PRESET, ON, OFF
         DIM: (STATE_ON, {"supported_color_modes": ["onoff"]}),
@@ -433,7 +435,7 @@ async def test_supports_from_home_assistants_flags(hass: HomeAssistant) -> None:
     expected = {
         COVER: ["stop", "set_position"],
         "cover.gate": [],
-        VALVE: ["stop"],
+        VALVE: [],  # the panel may only open and close a valve
         FAN: ["set_percentage"],
         "fan.attic": [],
         DIM: [],
@@ -484,6 +486,67 @@ async def test_supports_left_out_when_not_known(hass: HomeAssistant) -> None:
         assert [row["id"] for row in catalog["entities"] if "since" in row] == []
         await panel.wait_for("state", len(controlled) + 1)
         assert [msg["id"] for msg in panel.got("state") if "supports" in msg] == []
+
+
+async def test_a_valve_supports_nothing_more(hass: HomeAssistant) -> None:
+    """HCTL-002, HCTL-004 (BL-173): the panel may only open and close a valve, so its
+    "supports" is always an explicit empty list - with every feature flag, none, a
+    malformed or absent supported_features, and while unavailable - on the catalog
+    row and the state. Its position still goes out as "level"."""
+    valves = {
+        "valve.all": ("open", {"supported_features": 15, "current_position": 60}),
+        "valve.stop": ("open", {"supported_features": 8}),  # STOP
+        "valve.plain": ("closed", {"supported_features": 3}),  # OPEN | CLOSE
+        "valve.none": ("closed", {}),
+        "valve.bool": ("open", {"supported_features": True}),
+        "valve.word": ("open", {"supported_features": "12"}),
+        "valve.gone": (STATE_UNAVAILABLE, {"supported_features": 15}),
+        "valve.lost": (STATE_UNAVAILABLE, {}),
+    }
+    async with StatePanel() as panel:
+        for entity_id, (word, attrs) in valves.items():
+            hass.states.async_set(entity_id, word, attrs)
+        await _setup(hass, panel, {CONF_CONTROL_ENTITIES: list(valves)})
+        catalog = await panel.wait_for("catalog")
+        rows = _by_id(catalog["entities"])
+        assert {entity: row.get("supports") for entity, row in rows.items()} == {
+            entity: [] for entity in valves
+        }
+        assert rows["valve.all"]["level"] == 60
+        await panel.wait_for("state", len(valves))
+        states = _by_id(panel.got("state"))
+        assert {entity: msg.get("supports") for entity, msg in states.items()} == {
+            entity: [] for entity in valves
+        }
+        assert states["valve.all"]["level"] == 60
+        assert states["valve.gone"]["avail"] is False
+        assert "since" in states["valve.gone"]
+
+
+async def test_a_valve_opens_and_closes_only(hass: HomeAssistant) -> None:
+    """Features/24, BL-173: a valve the options allow opens and closes; stop and
+    set_position are refused not_allowed without calling any service."""
+    async with StatePanel() as panel:
+        hass.states.async_set(VALVE, "closed", {"supported_features": 15})
+        services = {
+            name: async_mock_service(hass, "valve", name)
+            for name in ("open_valve", "close_valve", "stop_valve", "set_valve_position")
+        }
+        await _setup(hass, panel, {CONF_CONTROL_ENTITIES: [VALVE]})
+        await panel.wait_for("catalog")
+
+        result = await _call(hass, panel, id="v1", entity=VALVE, action="open")
+        assert result == {"t": "call_result", "id": "v1", "ok": True, "error": ""}
+        result = await _call(hass, panel, 2, id="v2", entity=VALVE, action="close")
+        assert result == {"t": "call_result", "id": "v2", "ok": True, "error": ""}
+        result = await _call(hass, panel, 3, id="v3", entity=VALVE, action="stop")
+        assert result == {"t": "call_result", "id": "v3", "ok": False, "error": "not_allowed"}
+        result = await _call(hass, panel, 4, id="v4", entity=VALVE, action="set_position", value=50)
+        assert result == {"t": "call_result", "id": "v4", "ok": False, "error": "not_allowed"}
+        assert [call.data["entity_id"] for call in services["open_valve"]] == [VALVE]
+        assert [call.data["entity_id"] for call in services["close_valve"]] == [VALVE]
+        assert services["stop_valve"] == []
+        assert services["set_valve_position"] == []
 
 
 async def test_a_features_change_alone_sends_a_state(hass: HomeAssistant) -> None:

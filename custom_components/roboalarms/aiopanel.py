@@ -26,7 +26,7 @@ from typing import Any
 API_VERSION = 1
 DEFAULT_PORT = 6054
 FRAME_MAX = 65536
-CLIENT_INFO = "aioroboalarms 0.1.0"
+CLIENT_INFO = "aioroboalarms 0.2.0"
 SEND_QUEUE_MAX = 32  # sends allowed to wait for the transport at the same time
 
 # A panel of api 1 has 4 partitions and 128 zones (the firmware's alarm_types.h).

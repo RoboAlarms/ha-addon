@@ -53,7 +53,39 @@ entities, commands) and **M13** (two-way: HA entities as panel zones, panel devi
 | `.github/workflows/` | `validate.yml` (hassfest + HACS action), `tests.yml` (pytest + ruff) |
 | `hacs.json` | HACS metadata; `homeassistant` is the minimum HA version (2026.3.0, needed for the in-repo brand icon) |
 
-## Where things stand (2026-10-06)
+## Where things stand (2026-10-07)
+
+**0.2.0 release candidate (Claude, 2026-10-07; panel repo BL-173): edited and checked; not
+committed, not released.** Publishing waits for the owner's go. It is a testing release of
+everything since v0.1.0 (the sections below, committed up to 7b6671a) plus:
+- **A valve supports nothing more:** `coordinator._supports` returns `[]` for every valve -
+  on the catalog row and the state, whatever `supported_features` says, absent, malformed or
+  unavailable - because the panel may only open and close one (`_CALLS` has no `stop` or
+  `set_position` for a valve). Its position still goes out as `level`; `stop` and
+  `set_position` stay `not_allowed` without a service call. `test_a_valve_supports_nothing_more`,
+  `test_a_valve_opens_and_closes_only`; `test_supports_from_home_assistants_flags` now expects
+  a valve's `[]`.
+- **Version 0.2.0** in `manifest.json`, `pyproject.toml` and `aiopanel.py` `CLIENT_INFO`
+  (`protocol/aioroboalarms.py` synced); `hacs.json`'s name is "RoboAlarms", like the manifest.
+  API 1, the domain, entity ids, config entry keys, certificate trust and the Home Assistant
+  2026.3.0 minimum are unchanged. README: the panel's Smart Home screen uses the device
+  details; older firmware (0.6.x) ignores them; the release section names 0.2.0.
+- **Older panels:** the frames this candidate sends (hello, a full 20-row catalog page and the
+  rest, states with the new keys before and after the old ones, empty and populated arrays,
+  unavailable states, call results) were fed to the 0.6.0 panel's unchanged JSON reader and
+  link parser: every frame accepted, every catalog row walked, the old fields read exactly as
+  without the new keys. Panel repo docs/features/23 README (BL-173) records it; no old panel
+  was flashed for it.
+- Checks: 195 tests and Ruff lint and format in the `roboalarms-test` image, protocol sync
+  check OK, `python -m build` made `aioroboalarms-0.2.0` (wheel and sdist; the wheel's module
+  equals `aiopanel.py`), `git diff --check` clean. Not run here: hassfest and the HACS action
+  (CI runs them on push).
+- Left: commit (the owner's word), CI's hassfest, HACS, pytest and Ruff results for that
+  revision, then on the owner's go the GitHub release `v0.2.0` from it with the wheel and sdist
+  attached; then check that HACS offers it and that an upgrade keeps the pairing and the entity
+  ids. PyPI (panel repo BL-040) and the HACS default store stay separate.
+
+## Earlier status (2026-10-06)
 
 **Two fixes from a bench run on a development panel (Claude, 2026-10-06): checks passed;
 committed 2026-10-07, not released.** Panel repo docs/features/23 validation.md part 2, B029, BL-173:
@@ -106,8 +138,8 @@ validation.md part 3).** Tests in
 - **What a device can do, what a thermostat is doing, since when (BL-171, BL-174; Claude,
   2026-10-06, after the panel's UAT; committed 2026-10-07, not released; on the bench
   Home Assistant since 2026-10-06)**: a `control` row and state carry `supports` (light `brightness` from
-  `supported_color_modes`, fan `set_percentage`, cover/valve `stop`, `set_position` from
-  `supported_features`; also while unavailable; absent when Home Assistant doesn't say or for
+  `supported_color_modes`, fan `set_percentage`, cover `stop`, `set_position` from
+  `supported_features` - a valve's was the same until the 0.2.0 candidate made it `[]`; also while unavailable; absent when Home Assistant doesn't say or for
   other domains), `hvac_action` (climate, while available) and `since` (Unix s: unavailable
   since `last_changed` on a state; a scene's run time; never on an unavailable entity's catalog
   row) - `coordinator._supports`, `_since`. A change of `supports` or `hvac_action` alone sends
@@ -125,8 +157,8 @@ validation.md part 3).** Tests in
   ways, the chime switch (the panel no longer asks a remote client for a code, its
   CORE-CHIME-007), a wrong code as `service_validation_error` over the websocket, `changed_by`
   on arm and disarm.
-- Left: commit and release all of the above (every installed v0.1.0 drops a quiet house's link
-  every 95 s). Home Assistant `sensor` entities as zones are not offered (the options list
+- All of the above was committed 2026-10-07 (7b6671a) and goes out with 0.2.0 (above); every
+  installed v0.1.0 drops a quiet house's link every 95 s until then. Home Assistant `sensor` entities as zones are not offered (the options list
   `binary_sensor` only); the panel repo's docs now say so.
 
 ## Earlier status (2026-09-29)
