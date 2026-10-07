@@ -122,5 +122,19 @@
       "title": "Panel protocol is incompatible",
       "description": "{name} uses a protocol version this integration cannot understand. Update the panel firmware and the RoboAlarms integration to compatible versions. The connection will recover automatically once they agree."
     }
+  },
+  "exceptions": {
+    "invalid_code": {
+      "message": "The panel did not accept that code"
+    },
+    "not_authorized": {
+      "message": "That code is not allowed to do this on the panel"
+    },
+    "code_required": {
+      "message": "The panel needs a user code for this"
+    },
+    "locked_out": {
+      "message": "The panel is not taking codes for now after too many wrong ones. Wait a few minutes, then try again"
+    }
   }
 }

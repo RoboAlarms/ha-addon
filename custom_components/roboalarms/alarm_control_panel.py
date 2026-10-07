@@ -8,6 +8,8 @@ Home Assistant to the panel, which checks it like any keypad's.
 
 from __future__ import annotations
 
+from typing import Any
+
 from homeassistant.components.alarm_control_panel import (
     AlarmControlPanelEntity,
     AlarmControlPanelEntityFeature,
@@ -17,8 +19,12 @@ from homeassistant.components.alarm_control_panel import (
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
+from .const import DOMAIN
 from .coordinator import RoboAlarmsConfigEntry, RoboAlarmsCoordinator
 from .entity import RoboAlarmsPartitionEntity, async_add_partition_entities
+
+# The panel's events that arm or disarm a partition: each says who did it.
+_CHANGES = frozenset({"armed", "disarmed", "auto_stay"})
 
 _HA_STATE = {
     "disarmed": AlarmControlPanelState.DISARMED,
@@ -58,6 +64,34 @@ class RoboAlarmsPartition(RoboAlarmsPartitionEntity, AlarmControlPanelEntity):
         self._attr_unique_id = f"{self.panel_id}_p{partition}"
         if partition != 1:
             self._attr_name = f"Partition {partition}"
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self.async_on_remove(self.hass.bus.async_listen(f"{DOMAIN}_event", self._handle_event))
+
+    @callback
+    def _handle_event(self, event: Any) -> None:
+        """changed_by: who armed or disarmed this partition, as the panel's
+        event names them - the user's name, else their number, else nobody
+        (a quick arm, a schedule). Only this panel's events count (HA04), and
+        a silent one never shows here (HAI-008)."""
+        msg = event.data
+        if msg.get("entry_id") != self.coordinator.config_entry.entry_id:
+            return
+        if msg.get("event_type") not in _CHANGES or msg.get("partition") != self._partition:
+            return
+        if msg.get("silent") is True:
+            return
+        name = msg.get("user_name")
+        user = msg.get("user")
+        if isinstance(name, str) and name:
+            changed_by: str | None = name
+        elif isinstance(user, int) and not isinstance(user, bool) and user > 0:
+            changed_by = str(user)
+        else:
+            changed_by = None
+        self._attr_changed_by = changed_by
+        self.async_write_ha_state()
 
     @property
     @callback

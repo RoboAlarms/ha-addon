@@ -520,6 +520,9 @@ class PanelClient:
         self._send_lock = asyncio.Lock()
         self._waiting = 0  # sends queued behind the lock right now
         self._broken = False  # a send gave up: this connection is finished
+        # the event loop's clock when a frame last went out whole: the keepalive's measure
+        # of this side's silence (protocol.md)
+        self.last_sent = 0.0
         self._pair_nonce = b""
         self._pair_fp_panel = b""
         self.info: PanelInfo | None = None
@@ -589,6 +592,7 @@ class PanelClient:
                 # drain() below can never leave half a frame on the wire.
                 writer.write(frame)
                 await writer.drain()
+                self.last_sent = asyncio.get_running_loop().time()
         except TimeoutError as err:
             self._broken = True
             raise CannotConnect("the panel stopped reading") from err

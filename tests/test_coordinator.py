@@ -314,14 +314,16 @@ async def test_a_controllable_entity_is_followed_without_being_shared(
 
 async def test_a_controllable_entity_that_goes_away_says_so(hass: HomeAssistant) -> None:
     """Unavailable is reported as such, so the panel's tile greys out rather
-    than showing the last thing it happened to see."""
+    than showing the last thing it happened to see - and since when (HCTL-006)."""
     hass.states.async_set(LIGHT, STATE_ON)
     async with StatePanel() as panel:
         await _setup(hass, panel, {CONF_CONTROL_ENTITIES: [LIGHT]})
         await panel.wait_for("state")
 
         hass.states.async_set(LIGHT, STATE_UNAVAILABLE)
-        assert await panel.wait_for("state", 2) == {
+        msg = await panel.wait_for("state", 2)
+        assert msg.pop("since") == int(hass.states.get(LIGHT).last_changed.timestamp())
+        assert msg == {
             "t": "state",
             "id": LIGHT,
             "state": "",

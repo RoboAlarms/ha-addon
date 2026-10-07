@@ -31,22 +31,37 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import math
 from collections.abc import Callable, Iterable
 from contextlib import suppress
 from functools import partial
 from typing import Any, NamedTuple
 from uuid import uuid4
 
+from homeassistant.components.climate import ATTR_HVAC_ACTION
+from homeassistant.components.cover import CoverEntityFeature
+from homeassistant.components.fan import FanEntityFeature
+from homeassistant.components.light import ATTR_SUPPORTED_COLOR_MODES, brightness_supported
+from homeassistant.components.valve import ValveEntityFeature
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_HOST, CONF_PORT, STATE_UNAVAILABLE, STATE_UNKNOWN
-from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.const import (
+    ATTR_SUPPORTED_FEATURES,
+    CONF_HOST,
+    CONF_PORT,
+    STATE_OFF,
+    STATE_ON,
+    STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
+)
+from homeassistant.core import Event, EventStateChangedData, HomeAssistant, State, callback
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from .aiopanel import (
     CannotConnect,
@@ -163,6 +178,155 @@ def _call_data(wanted: _Call, msg: dict[str, Any]) -> dict[str, Any] | None:
     return {wanted.field: value}
 
 
+def _says_something(state: State | None) -> bool:
+    """Whether a state is worth passing on. Unavailable or gone never is, and
+    unknown usually isn't - but a scene's state is the time it last ran,
+    "unknown" until it first has, and it can run all the same (a scene is never
+    a zone). Read as unavailable, a scene nobody has run yet was greyed on the
+    panel and could not be run from it."""
+    if state is None or state.state == STATE_UNAVAILABLE:
+        return False
+    return state.state != STATE_UNKNOWN or state.domain == "scene"
+
+
+def _number(value: Any) -> float | None:
+    """A finite number from an attribute, or None (a bool is not a number here)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if math.isfinite(value) else None
+
+
+def _percent(value: float | None) -> int | None:
+    """0..100 as an integer, or None when out of range: the panel would treat it
+    as not known anyway (protocol.md)."""
+    if value is None:
+        return None
+    level = round(value)
+    return level if 0 <= level <= 100 else None
+
+
+def _control_values(state: State | None) -> dict[str, Any]:
+    """What a controllable entity is doing beyond its state word (protocol.md,
+    the Devices screen): a light's brightness, a fan's speed, a cover's or a
+    valve's position as "level" (0..100); a thermostat's target and measured
+    temperature in hundredths of a degree ("setpoint", "temp"), the modes it
+    offers ("modes") and what it is doing now ("hvac_action"). Each one is left
+    out while it is not known, and the panel treats absent as not known, so a
+    client sending none works as before. A light that is off but can dim says
+    0, so the panel keeps its Brightness slider when the link comes up while
+    the light is off.
+
+    Then what it can do beyond its domain's own actions ("supports", BL-171),
+    sent while it is unavailable too so a greyed tile keeps its shape, and
+    since when ("since", BL-174): since when it has been unavailable, or when a
+    scene last ran."""
+    if state is None:
+        return {}
+    out = _live_values(state) if _says_something(state) else {}
+    supports = _supports(state)
+    if supports is not None:
+        out["supports"] = supports
+    since = _since(state)
+    if since is not None:
+        out["since"] = since
+    return out
+
+
+def _supports(state: State) -> list[str] | None:
+    """What an entity can do beyond the actions its domain always has, in
+    protocol.md's words, or None when Home Assistant doesn't say (or for a
+    domain that has nothing optional): the panel then offers everything its
+    kind has, as it did before this key existed. A list, even empty, is the
+    whole list - what it leaves out the panel doesn't offer."""
+    attrs = state.attributes
+    domain = state.domain
+    if domain == "light":
+        modes = attrs.get(ATTR_SUPPORTED_COLOR_MODES)
+        if not isinstance(modes, (list, tuple, set, frozenset)):
+            return None
+        modes = [mode for mode in modes if isinstance(mode, str)]
+        return ["brightness"] if brightness_supported(modes) else []
+    if domain not in ("fan", "cover", "valve"):
+        return None
+    features = attrs.get(ATTR_SUPPORTED_FEATURES)
+    if isinstance(features, bool) or not isinstance(features, int):
+        return None
+    if domain == "fan":
+        return ["set_percentage"] if features & FanEntityFeature.SET_SPEED else []
+    flags = CoverEntityFeature if domain == "cover" else ValveEntityFeature
+    out: list[str] = []
+    if features & flags.STOP:
+        out.append("stop")
+    if features & flags.SET_POSITION:
+        out.append("set_position")
+    return out
+
+
+def _since(state: State) -> int | None:
+    """Since when, in Unix seconds (protocol.md): since when an entity has been
+    unavailable (its last_changed), or when an available scene last ran (the
+    time its state word holds). None for anything else, a scene that hasn't run
+    yet, or a time the panel couldn't read."""
+    if not _says_something(state):
+        when = state.last_changed
+    elif state.domain == "scene":
+        # A scene's state can be set to any text: one shaped like a date that
+        # isn't one (2026-02-30) raises, and a bad time is only "not known".
+        when = None
+        with suppress(ValueError):
+            when = dt_util.parse_datetime(state.state)
+    else:
+        return None
+    if when is None or when.tzinfo is None:
+        return None
+    seconds = int(when.timestamp())
+    return seconds if 1 <= seconds <= 0xFFFFFFFF else None
+
+
+def _live_values(state: State) -> dict[str, Any]:
+    """_control_values' level, setpoint, temp, modes and hvac_action, for an
+    entity that says something."""
+    attrs = state.attributes
+    domain = state.domain
+    out: dict[str, Any] = {}
+    level: int | None = None
+    if domain == "light":
+        brightness = _number(attrs.get("brightness"))
+        if state.state == STATE_ON and brightness is not None:
+            level = _percent(brightness * 100 / 255)
+        elif state.state == STATE_OFF and brightness_supported(
+            attrs.get(ATTR_SUPPORTED_COLOR_MODES)
+        ):
+            level = 0
+    elif domain == "fan":
+        level = _percent(_number(attrs.get("percentage")))
+    elif domain in ("cover", "valve"):
+        level = _percent(_number(attrs.get("current_position")))
+    elif domain == "climate":
+        setpoint = _number(attrs.get("temperature"))
+        if setpoint is not None:
+            out["setpoint"] = round(setpoint * 100)
+        temp = _number(attrs.get("current_temperature"))
+        if temp is not None:
+            out["temp"] = round(temp * 100)
+        modes = attrs.get("hvac_modes")
+        if isinstance(modes, (list, tuple)):
+            out["modes"] = [str(mode) for mode in modes if isinstance(mode, str)]
+        action = attrs.get(ATTR_HVAC_ACTION)
+        if isinstance(action, str):
+            out["hvac_action"] = str(action)
+    if level is not None:
+        out["level"] = level
+    return out
+
+
+# The panel's command results that mean the code itself was the problem
+# (alarm_result_name() in the panel's strings.c): the person typed something
+# the panel did not take, so Home Assistant shows it as their mistake, in
+# their language, rather than as a failure of the integration.
+_CODE_REFUSALS = frozenset({"invalid_code", "not_authorized", "code_required", "locked_out"})
+
+
 class WrongPanel(LinkError):
     """The certificate on the other end isn't the pinned one."""
 
@@ -185,6 +349,7 @@ class RoboAlarmsCoordinator(DataUpdateCoordinator[PanelState]):
         self._watch_seen = False  # the panel repeated its list on this connection
         self._unwatch: Callable[[], None] | None = None
         self._outbox: dict[str, None] = {}  # entities whose newest state is owed
+        self._sent: dict[str, dict[str, Any]] = {}  # the last state message per entity
         self._draining = False
         self._calls: dict[str, asyncio.Task] = {}  # device actions running right now
         self._answered: dict[str, str] = {}  # call id -> the one answer it was given
@@ -373,17 +538,35 @@ class RoboAlarmsCoordinator(DataUpdateCoordinator[PanelState]):
         return state
 
     async def _async_listen(self, client: PanelClient, state: PanelState) -> None:
-        quiet = 0
+        """Read the panel's messages and keep the link alive in both directions.
+
+        protocol.md: a ping after 30 s of silence, and a connection silent for
+        90 s is dead. Each side judges silence by what it hears, so a ping goes
+        out after 30 s in which this side sent nothing - the panel's own updates
+        (every 10 s) would otherwise keep this side from ever pinging, and the
+        panel dropped a quiet house's link every 90 s - and after 30 s in which
+        it heard nothing, when the pong is what it waits for.
+        """
+        clock = asyncio.get_running_loop().time
+        heard = asked = clock()
         while True:
-            try:
-                msg = await client.recv(timeout=_QUIET_PING_S)
-            except TimeoutError:
-                quiet += 1
-                if quiet >= _QUIET_LIMIT:
-                    raise CannotConnect("the panel went quiet") from None
+            now = clock()
+            if now - heard >= _QUIET_PING_S * _QUIET_LIMIT:
+                raise CannotConnect("the panel went quiet")
+            if now - client.last_sent >= _QUIET_PING_S or now - max(heard, asked) >= _QUIET_PING_S:
+                asked = now
                 await client.send({"t": "ping"}, timeout=_QUIET_PING_S)
                 continue
-            quiet = 0
+            due = min(
+                client.last_sent + _QUIET_PING_S,
+                max(heard, asked) + _QUIET_PING_S,
+                heard + _QUIET_PING_S * _QUIET_LIMIT,
+            )
+            try:
+                msg = await client.recv(timeout=max(due - now, 0.0))
+            except TimeoutError:
+                continue
+            heard = clock()
             if await self._async_handle(state, msg):
                 self.async_set_updated_data(state)
 
@@ -395,6 +578,11 @@ class RoboAlarmsCoordinator(DataUpdateCoordinator[PanelState]):
         when they arrive (HA01).
         """
         t = msg.get("t")
+        if t == "ping":
+            # protocol.md: ping and pong go both ways; the panel's ping is
+            # answered like the client's own is
+            await self._async_pong()
+            return False
         if t in ("snapshot", "delta"):
             state.apply(msg)
             return True
@@ -423,6 +611,18 @@ class RoboAlarmsCoordinator(DataUpdateCoordinator[PanelState]):
         elif t == "call":
             self._async_start_call(msg)
         return False
+
+    async def _async_pong(self) -> None:
+        """Answer the panel's keepalive."""
+        client = self._client
+        if client is None:
+            return
+        try:
+            await client.send({"t": "pong"}, timeout=_QUIET_PING_S)
+        except CannotConnect as err:
+            await self._async_link_failed(err)
+        except LinkError as err:
+            _LOGGER.debug("%s: the pong could not be sent: %s", self.name, err)
 
     # ---- what the panel may see (HAI-009) -------------------------------------------
 
@@ -487,12 +687,16 @@ class RoboAlarmsCoordinator(DataUpdateCoordinator[PanelState]):
     ) -> dict[str, Any]:
         """One catalog row, with the keys protocol.md names for it.
 
-        "zones" and "control" come last: the panel's parser only needs page and
-        more before the entities, and older panels ignore what they don't know.
+        "zones" and "control" come after the original keys, and a controllable
+        entity's values (level, setpoint, temp, modes, hvac_action, supports,
+        since - each only when known) after them: the panel's parser only needs
+        page and more before the entities, and older panels ignore what they
+        don't know. A catalog row can't say unavailable, so it never carries
+        since when an entity has been (its state follows at once and does).
         """
         state = self.hass.states.get(entity_id)
-        known = state is not None and state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN)
-        return {
+        known = _says_something(state)
+        row = {
             "id": entity_id,
             "name": state.name if state is not None else entity_id,
             "area": self._area_name(entity_id),
@@ -502,6 +706,12 @@ class RoboAlarmsCoordinator(DataUpdateCoordinator[PanelState]):
             "zones": zones,
             "control": control,
         }
+        if control:
+            values = _control_values(state)
+            if not known:
+                values.pop("since", None)  # a catalog row can't say unavailable; its state follows
+            row.update(values)
+        return row
 
     async def _async_send_catalog(self) -> None:
         """Send the allowed entities as pages; page 0 replaces what the panel had."""
@@ -589,6 +799,8 @@ class RoboAlarmsCoordinator(DataUpdateCoordinator[PanelState]):
         stale = set(self._outbox) - set(following)
         for entity_id in stale:
             del self._outbox[entity_id]
+        for entity_id in set(self._sent) - set(following):
+            del self._sent[entity_id]
         if following:
             self._unwatch = async_track_state_change_event(
                 self.hass, following, self._async_state_changed
@@ -602,6 +814,7 @@ class RoboAlarmsCoordinator(DataUpdateCoordinator[PanelState]):
             self._unwatch = None
         self._watched = []
         self._outbox.clear()
+        self._sent.clear()  # the next connection is told everything afresh
 
     async def _async_state_changed(self, event: Event[EventStateChangedData]) -> None:
         """A followed entity moved: the panel hears about it at once (HAI-006).
@@ -612,6 +825,10 @@ class RoboAlarmsCoordinator(DataUpdateCoordinator[PanelState]):
         its current state sent, and the send below reads that state when it
         gets there, so what goes out is the newest rather than a backlog of
         superseded ones.
+
+        Home Assistant reports attribute changes too. One the panel gets - a
+        controllable light's brightness, say - goes out like a new state word;
+        one it doesn't (a name, an icon) sends nothing (protocol.md).
         """
         self._outbox[event.data["entity_id"]] = None
         if self._draining:
@@ -621,27 +838,42 @@ class RoboAlarmsCoordinator(DataUpdateCoordinator[PanelState]):
             while self._outbox:
                 entity_id = next(iter(self._outbox))  # oldest first
                 del self._outbox[entity_id]
-                await self._async_send_state(entity_id)
+                await self._async_send_state(entity_id, only_if_changed=True)
         finally:
             self._draining = False
 
-    async def _async_send_state(self, entity_id: str) -> None:
-        """One state message. Unknown, unavailable or gone is avail false: the
-        panel's zone shows CHECK after its grace time rather than "closed"."""
+    def _state_message(self, entity_id: str) -> dict[str, Any]:
+        """One entity's state message, as protocol.md shapes it."""
+        state = self.hass.states.get(entity_id)
+        avail = _says_something(state)
+        msg: dict[str, Any] = {
+            "t": "state",
+            "id": entity_id,
+            "state": state.state if avail and state is not None else "",
+            "avail": avail,
+        }
+        if entity_id in self._controllable:
+            msg.update(_control_values(state))
+        return msg
+
+    async def _async_send_state(self, entity_id: str, *, only_if_changed: bool = False) -> None:
+        """One state message. Unknown (a scene's aside), unavailable or gone is
+        avail false: the panel's zone shows CHECK after its grace time rather
+        than "closed".
+
+        A connection, a watch list or an options change always sends (the
+        panel needs every sensor's state again after its link comes back,
+        ZSRC-015); a change in Home Assistant sends only when the message
+        differs from the last one this connection carried for that entity."""
         client = self._client
         if client is None:
             return
-        state = self.hass.states.get(entity_id)
-        avail = state is not None and state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN)
+        msg = self._state_message(entity_id)
+        if only_if_changed and self._sent.get(entity_id) == msg:
+            return
         try:
-            await client.send(
-                {
-                    "t": "state",
-                    "id": entity_id,
-                    "state": state.state if avail and state is not None else "",
-                    "avail": avail,
-                }
-            )
+            await client.send(msg)
+            self._sent[entity_id] = msg
         except CannotConnect as err:
             # Not one unlucky message: the link is finished (HA11). Close it so
             # the state goes out again on the connection that replaces it.
@@ -799,9 +1031,16 @@ class RoboAlarmsCoordinator(DataUpdateCoordinator[PanelState]):
             self._pending.pop(req_id, None)
 
     async def async_command(self, action: str, **fields: Any) -> dict[str, Any]:
-        """Send a command and wait for the panel's answer to it."""
+        """Send a command and wait for the panel's answer to it.
+
+        A code the panel would not take is the person's mistake, not the
+        integration's: ServiceValidationError with its own words. Any other
+        refusal stays a HomeAssistantError carrying the panel's result name.
+        """
         result = await self._async_request({"t": "command", "action": action, **fields})
         verdict = str(result.get("result") or "")
+        if verdict in _CODE_REFUSALS:
+            raise ServiceValidationError(translation_domain=DOMAIN, translation_key=verdict)
         if verdict != "ok":
             raise HomeAssistantError(f"The panel refused it: {verdict.replace('_', ' ')}")
         return result

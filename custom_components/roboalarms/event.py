@@ -25,7 +25,8 @@ from .const import DOMAIN
 from .coordinator import RoboAlarmsConfigEntry, RoboAlarmsCoordinator
 from .entity import RoboAlarmsEntity
 
-# alarm_strings.c alarm_event_name(): an external contract of the panel (add, never rename).
+# The panel's alarm_event_name() (alarm_core strings.c), in its order: an external contract
+# of the panel (add, never rename). A type the panel adds later is dropped here until listed.
 EVENT_TYPES = [
     "system_start", "armed", "arm_failed", "disarmed", "auto_stay", "exit_restart",
     "entry_delay", "alarm", "alarm_restore", "exit_error", "recent_closing", "alarm_aborted",
@@ -34,7 +35,13 @@ EVENT_TYPES = [
     "invalid_code", "lockout", "chime_on", "chime_off", "walk_test_start", "walk_test_end",
     "walk_test_zone", "monitor_fault", "monitor_restore", "user_changed", "user_deleted",
     "config_changed", "user_updated", "program_enter", "program_exit", "factory_reset",
-    "firmware_update",
+    "firmware_update", "zwave_device_added", "zwave_device_added_insecure",
+    "zwave_device_removed", "zwave_device_left", "zwave_network_reset", "zwave_radio_restarted",
+    "zwave_device_software", "zwave_garage", "zwave_jamming_reported", "backup_made",
+    "backup_restored", "walk_test_extend", "walk_test_warning", "clock_set", "zigbee_added",
+    "zigbee_removed", "zigbee_forgotten", "zigbee_left", "zigbee_replaced", "zigbee_join_refused",
+    "zigbee_channel", "zigbee_network_reset", "zigbee_radio_restarted", "automation_failed",
+    "arming_put_off",
 ]  # fmt: skip
 
 

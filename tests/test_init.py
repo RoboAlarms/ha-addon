@@ -16,6 +16,7 @@ from homeassistant.const import (
     STATE_OFF,
     STATE_ON,
     STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
@@ -113,6 +114,8 @@ class StatePanel:
         self.zwave: list[dict[str, Any]] | None = None
         self.zwave_sets: list[dict[str, Any]] = []
         self.zwave_error = ""
+        self.pings = 0  # how many keepalives the integration sent
+        self.connections = 0
         self._push: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._writer: asyncio.StreamWriter | None = None
 
@@ -158,6 +161,7 @@ class StatePanel:
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         self._writer = writer
+        self.connections += 1
         try:
             header = await reader.readexactly(4)
             await reader.readexactly(int.from_bytes(header, "big"))  # the client's hello
@@ -203,6 +207,7 @@ class StatePanel:
                             },
                         )
                     elif msg.get("t") == "ping":
+                        self.pings += 1
                         await self._send(writer, {"t": "pong"})
                     read = asyncio.ensure_future(reader.readexactly(4))
         except (asyncio.IncompleteReadError, ConnectionError):
@@ -306,11 +311,11 @@ async def test_arm_away_roundtrip(hass: HomeAssistant) -> None:
 
 
 async def test_refused_command_raises(hass: HomeAssistant) -> None:
-    """A wrong code comes back as the panel's own words, not success."""
+    """A wrong code is refused, not taken as success (its words: test_bench_findings)."""
     async with StatePanel() as panel:
         panel.command_result = "invalid_code"
         await _setup(hass, panel)
-        with pytest.raises(HomeAssistantError, match="invalid code"):
+        with pytest.raises(HomeAssistantError, match="did not accept that code"):
             await hass.services.async_call(
                 "alarm_control_panel",
                 "alarm_disarm",
@@ -339,6 +344,31 @@ async def test_zone_added_without_restart(hass: HomeAssistant) -> None:
             }
         )
         await _wait_for_state(hass, "binary_sensor.garage_door", STATE_ON)
+
+
+async def test_pings_while_the_panel_talks(hass: HomeAssistant) -> None:
+    """protocol.md: the client pings after 30 s of silence, and the panel drops a
+    connection it has heard nothing on for 90 s. A real panel sends an update every
+    10 s, so the integration always hears something: its ping has to follow what it
+    sends. Before, a quiet house's link dropped and reconnected every 95 s."""
+    async with StatePanel() as panel:
+        with patch("custom_components.roboalarms.coordinator._QUIET_PING_S", 0.2):
+            await _setup(hass, panel)
+            for n in range(30):  # the panel talks every 0.05 s for 1.5 s
+                panel.push({"t": "delta", "seq": 100 + n})
+                await asyncio.sleep(0.05)
+            assert panel.pings >= 3
+
+
+async def test_pings_a_quiet_panel(hass: HomeAssistant) -> None:
+    """A panel that says nothing is asked (a ping, answered by a pong), and the
+    pong keeps the connection: no reconnect while it answers."""
+    async with StatePanel() as panel:
+        with patch("custom_components.roboalarms.coordinator._QUIET_PING_S", 0.2):
+            await _setup(hass, panel)
+            await asyncio.sleep(1.5)
+            assert panel.pings >= 3
+            assert panel.connections == 1
 
 
 async def test_chime_button_and_event(hass: HomeAssistant) -> None:
@@ -519,6 +549,7 @@ async def test_changed_options_resend_the_catalog(hass: HomeAssistant) -> None:
 # ---- what the panel may do: its Devices screen (Features/24) ---------------------------
 
 LIGHT = "light.porch"
+SCENE = "scene.evening"
 LAMP = "light.lamp"
 LOCK = "lock.front_door"
 THERMOSTAT = "climate.hall"
@@ -547,6 +578,22 @@ async def test_call_controls_an_allowed_light(hass: HomeAssistant) -> None:
         assert len(calls) == 1
         assert calls[0].data["entity_id"] == LIGHT
         assert calls[0].data["brightness_pct"] == 60
+
+
+async def test_a_scene_never_run_is_there(hass: HomeAssistant) -> None:
+    """A scene's state is the time it last ran, "unknown" until it first has. The
+    panel has to hear it as available - an unavailable device is greyed and a
+    tap on it refused - so a scene nobody has run yet can still be run."""
+    async with StatePanel() as panel:
+        hass.states.async_set(SCENE, STATE_UNKNOWN, {"friendly_name": "Evening"})
+        await _setup(hass, panel, {CONF_CONTROL_ENTITIES: [SCENE]})
+        catalog = await panel.wait_for("catalog")
+        assert catalog["entities"][0]["state"] == STATE_UNKNOWN
+
+        hass.states.async_set(SCENE, STATE_UNKNOWN, {"friendly_name": "Evening Lights"})
+        state = await panel.wait_for("state")
+        assert state["id"] == SCENE
+        assert state["avail"] is True
 
 
 async def test_call_outside_the_options_is_refused(hass: HomeAssistant) -> None:

@@ -11,7 +11,7 @@ from .const import DOMAIN
 
 BASE = {
     vol.Required("entry_id"): str,
-    vol.Required("code"): vol.All(str, vol.Match(r"^[0-9]{4,8}$")),
+    vol.Required("code"): vol.All(str, vol.Match(r"^[0-9]{4,10}$")),
     vol.Optional("partition", default=1): vol.All(vol.Coerce(int), vol.Range(min=1, max=8)),
 }
 SCHEMAS = {

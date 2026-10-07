@@ -53,7 +53,83 @@ entities, commands) and **M13** (two-way: HA entities as panel zones, panel devi
 | `.github/workflows/` | `validate.yml` (hassfest + HACS action), `tests.yml` (pytest + ruff) |
 | `hacs.json` | HACS metadata; `homeassistant` is the minimum HA version (2026.3.0, needed for the in-repo brand icon) |
 
-## Where things stand (2026-09-29)
+## Where things stand (2026-10-06)
+
+**Two fixes from a bench run on a development panel (Claude, 2026-10-06): checks passed;
+committed 2026-10-07, not released.** Panel repo docs/features/23 validation.md part 2, B029, BL-173:
+- **Keepalive (panel repo docs/bugs/B029):** a quiet house's link dropped every 95 s. The panel
+  measures silence by what it receives and drops at 90 s; `_async_listen` pinged only after 30 s
+  of *hearing* nothing, which never happened since the panel sends an update every 10 s. It now
+  also pings after 30 s in which it *sent* nothing (`PanelClient.last_sent`, kept by `send`;
+  `protocol/aioroboalarms.py` synced). Tests: `test_pings_while_the_panel_talks` (1 ping instead
+  of >= 3 before the fix) and `test_pings_a_quiet_panel`.
+- **A scene never run was unavailable:** its state is the time it last ran, "unknown" until it
+  has; `_says_something()` keeps a scene's unknown available in the catalog and the state
+  messages, so the panel no longer greys it and refuses a tap. Test:
+  `test_a_scene_never_run_is_there` (failed before the fix).
+- Checks then: 165 tests, Ruff clean, protocol sync check OK. Live: Home Assistant 2026.9.4 in
+  Docker with both fixes, paired with the panel - no drop since, the scene runnable.
+
+**The rest of BL-173 and the integration's side of BL-171 (Claude, 2026-10-06, later): checks
+passed; committed 2026-10-07, not released; tried live with a panel that reads the values (panel repo
+validation.md part 3).** Tests in
+`tests/test_bench_findings.py`:
+- **The panel's `ping` gets a `pong`** (`_async_handle` -> `_async_pong`; it was ignored).
+  `test_answers_the_panels_ping`.
+- **`changed_by`**: the alarm entity listens to this entry's `roboalarms_event`s; `armed`,
+  `disarmed` and `auto_stay` for its partition set it to the event's `user_name`, else its
+  `user` number, else None; silent events never (HAI-008).
+  `test_changed_by_follows_arm_and_disarm_events`, `test_changed_by_ignores_another_panels_events`.
+- **A code the panel won't take** (`invalid_code`, `not_authorized`, `code_required`,
+  `locked_out`) raises `ServiceValidationError` with `translation_key` = the result name and
+  text in `strings.json` "exceptions" (en, es; Home Assistant drops a trailing period, so the
+  texts have none); other refusals stay `HomeAssistantError` with the panel's words.
+  `test_a_refused_code_is_a_validation_error` (x8), `test_other_refusals_stay_as_they_were`;
+  `test_init.py: test_refused_command_raises` now matches the new words.
+- **Codes 4-10 digits** in `services.py` (the only 4-8 limit; services.yaml, the config flow and
+  the entity had none). `test_services_take_codes_of_4_to_10_digits`.
+- **`EVENT_TYPES`** gains the panel's 25 newer types (Z-Wave 9, Zigbee 9, backup 2, walk test 2,
+  `clock_set`, `automation_failed`, `arming_put_off`): now exactly `alarm_event_name()`'s list.
+  The entity doesn't translate event types, so no strings. `test_event_types_cover_the_panels_list`,
+  `test_a_newer_event_reaches_the_event_entity`.
+- **A device's values (BL-171)**: a `control` entity's catalog row and `state` message carry
+  `level` (light brightness %, fan percentage, cover/valve position), `setpoint` and `temp`
+  (climate, hundredths) and `modes` (climate `hvac_modes`), each only when known
+  (`coordinator._control_values`); a light that is off but can dim (`brightness_supported`)
+  says level 0, so the panel keeps its Brightness slider when the link comes up while it is
+  off (`test_an_off_light_that_dims_says_0`). A state change in Home Assistant sends a `state` only when
+  the message differs from the last one this connection sent for that entity (an attribute
+  the panel doesn't get sends nothing); a connection, the watch list and an options change
+  always send. `test_catalog_carries_a_devices_values`, `test_values_absent_when_not_known`,
+  `test_a_brightness_change_alone_sends_a_state`, `test_a_thermostat_setpoint_change_sends_a_state`,
+  `test_an_options_change_sends_every_state_again`.
+- **What a device can do, what a thermostat is doing, since when (BL-171, BL-174; Claude,
+  2026-10-06, after the panel's UAT; committed 2026-10-07, not released; on the bench
+  Home Assistant since 2026-10-06)**: a `control` row and state carry `supports` (light `brightness` from
+  `supported_color_modes`, fan `set_percentage`, cover/valve `stop`, `set_position` from
+  `supported_features`; also while unavailable; absent when Home Assistant doesn't say or for
+  other domains), `hvac_action` (climate, while available) and `since` (Unix s: unavailable
+  since `last_changed` on a state; a scene's run time; never on an unavailable entity's catalog
+  row) - `coordinator._supports`, `_since`. A change of `supports` or `hvac_action` alone sends
+  a state (the `_sent` dedup compares whole messages); zone-only entities carry none of them.
+  `test_supports_from_home_assistants_flags`, `test_supports_left_out_when_not_known`,
+  `test_a_features_change_alone_sends_a_state`, `test_supports_and_since_while_unavailable`,
+  `test_hvac_action_crosses`, `test_a_scene_says_when_it_ran`;
+  `test_coordinator.py: test_a_controllable_entity_that_goes_away_says_so` now expects `since`.
+  Checks: 192 tests in the `roboalarms-test` image, Ruff lint and format clean, protocol sync
+  check OK (`aiopanel.py` unchanged). Needs the panel's side (its protocol.md: these keys) to
+  have an effect; an older panel skips them.
+- Checks before that part: 186 tests in the `roboalarms-test` image, Ruff lint and format clean, protocol sync
+  check OK (`aiopanel.py` unchanged by this part).
+- Live with the panel (Home Assistant 2026.9.4): the values on its Smart Home, a mode both
+  ways, the chime switch (the panel no longer asks a remote client for a code, its
+  CORE-CHIME-007), a wrong code as `service_validation_error` over the websocket, `changed_by`
+  on arm and disarm.
+- Left: commit and release all of the above (every installed v0.1.0 drops a quiet house's link
+  every 95 s). Home Assistant `sensor` entities as zones are not offered (the options list
+  `binary_sensor` only); the panel repo's docs now say so.
+
+## Earlier status (2026-09-29)
 
 **Z-Wave devices, a CO fix and Spanish (Claude, 2026-09-29): checks passed; committed and pushed
 with this note.** Panel repo BL-043, BL-027 and BL-005:
